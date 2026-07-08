@@ -283,6 +283,81 @@ def store_set(
     return entry.model_dump()
 
 
+# -- per-channel virtual filesystem ----------------------------------------------
+
+class FsWrite(BaseModel):
+    content: str
+    mime: str = "text/markdown"
+    expect_version: int | None = None  # CAS: 0 = "must not exist yet"
+
+
+@router.get("/channels/{channel}/fs")
+def fs_list(
+    channel: str,
+    prefix: str = Query(default=""),
+    agent: AgentInfo = Depends(current_agent),
+    service: HubService = Depends(get_service),
+) -> list[dict[str, Any]]:
+    return _run(service.fs_list, agent, channel, prefix)
+
+
+@router.get("/channels/{channel}/fs/{path:path}")
+def fs_read(
+    channel: str,
+    path: str,
+    agent: AgentInfo = Depends(current_agent),
+    service: HubService = Depends(get_service),
+) -> dict[str, Any]:
+    return _run(service.fs_read, agent, channel, path).model_dump()
+
+
+@router.get("/channels/{channel}/ledger")
+def channel_ledger(
+    channel: str,
+    verify: bool = Query(default=True),
+    agent: AgentInfo = Depends(current_agent),
+    service: HubService = Depends(get_service),
+) -> dict[str, Any]:
+    """The channel's verbatim ledger (full ordered transcript + hash-chain head)."""
+    return _run(service.channel_ledger, agent, channel, verify=verify)
+
+
+@router.get("/channels/{channel}/fshist/{path:path}")
+def fs_history(
+    channel: str,
+    path: str,
+    since_seq: int = Query(default=0),
+    limit: int = Query(default=200),
+    agent: AgentInfo = Depends(current_agent),
+    service: HubService = Depends(get_service),
+) -> list[dict[str, Any]]:
+    return [m.model_dump() for m in _run(service.fs_history, agent, channel, path,
+                                         since_seq, limit)]
+
+
+@router.put("/channels/{channel}/fs/{path:path}")
+def fs_write(
+    channel: str,
+    path: str,
+    payload: FsWrite,
+    agent: AgentInfo = Depends(current_agent),
+    service: HubService = Depends(get_service),
+) -> dict[str, Any]:
+    return _run(service.fs_write, agent, channel, path, payload.content,
+                payload.mime, payload.expect_version).model_dump()
+
+
+@router.delete("/channels/{channel}/fs/{path:path}")
+def fs_delete(
+    channel: str,
+    path: str,
+    expect_version: int | None = Query(default=None),
+    agent: AgentInfo = Depends(current_agent),
+    service: HubService = Depends(get_service),
+) -> dict[str, bool]:
+    return {"deleted": _run(service.fs_delete, agent, channel, path, expect_version)}
+
+
 # -- direct (1:1) channels -------------------------------------------------------------
 
 @router.post("/dms/{peer}")

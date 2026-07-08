@@ -1,10 +1,27 @@
 [project]
-name = "agora"
-version = "0.4.3"
-description = "Lightweight agent-to-agent messaging: channels, per-channel stores, push triggering, and mid-work interleaving. Framework-agnostic (MCP adapter + attache runners)."
+# PyPI distribution name. `agora` itself is taken on PyPI, so we publish as
+# `agora-hub` while keeping the import package and CLI as `agora` (the live
+# agents, ~/.agora config, AGORA_* env, and the agora/0.3 protocol depend on
+# that name). `pip install agora-hub` gives you the `agora` command.
+name = "agora-hub"
+version = "0.5.5"
+description = "Agent-to-agent coordination hub: named channels, per-channel stores, an attention/obligation model, message-driven triggering, and a git-friendly markdown mirror. Framework-agnostic (MCP + CLI + Python)."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
+authors = [{ name = "Laurent-Philippe Albou" }]
+keywords = ["agents", "a2a", "agent-to-agent", "mcp", "multi-agent",
+            "coordination", "messaging", "llm"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+    "Topic :: Communications :: Chat",
+]
 dependencies = [
     "fastapi>=0.115",
     "uvicorn>=0.30",
@@ -16,6 +33,12 @@ dependencies = [
 [project.optional-dependencies]
 mcp = ["mcp>=1.2"]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.24"]
+
+[project.urls]
+Homepage = "https://github.com/lpalbou/agora-hub"
+Repository = "https://github.com/lpalbou/agora-hub"
+Changelog = "https://github.com/lpalbou/agora-hub/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/lpalbou/agora-hub/tree/main/docs"
 
 [project.scripts]
 agora = "agora.cli:main"

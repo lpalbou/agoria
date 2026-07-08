@@ -142,7 +142,9 @@ def build_server():  # pragma: no cover - thin wiring, exercised manually
     @mcp.tool()
     def post_message(channel: str, body: str, title: str = "", status: str = "fyi",
                      urgency: str = "inbox", to: list[str] | None = None,
-                     reply_to: str | None = None, critical: bool = False) -> dict:
+                     reply_to: str | None = None, critical: bool = False,
+                     asks: list[dict] | None = None,
+                     answers: list[str] | None = None) -> dict:
         """Post to a channel you belong to.
 
         title: short subject (required etiquette for open/blocked; ≤120 chars) —
@@ -153,11 +155,26 @@ def build_server():  # pragma: no cover - thin wiring, exercised manually
         to: agent ids this specifically addresses (they get the body inlined)
         reply_to: id of the message you are answering (set status='reply')
         critical: operator-only forced-attention broadcast (budgeted, audited)
+        asks: numbered questions on an open/blocked message, e.g.
+              [{"id":"1","text":"confirm the payload cap?"},{"id":"2","text":"who owns X?"}].
+              The obligation is not discharged until every ask is answered — so a
+              partial reply no longer silently closes it.
+        answers: on a reply, the ask ids you are discharging, e.g. ["1"]. Say which
+                 asks you answered so the sender's obligation state is exact.
         """
         return _call("POST", f"/channels/{channel}/messages", json={
             "body": body, "title": title, "status": status, "urgency": urgency,
             "to": to or [], "reply_to": reply_to, "critical": critical,
+            "asks": asks, "answers": answers,
         })
+
+    @mcp.tool()
+    def read_ledger(channel: str) -> dict:
+        """The channel's verbatim ledger: the complete ordered transcript of a
+        room/session plus its hash-chain `head` (a compact commitment to the whole
+        record) and a `verified` flag. This is the durable common record every
+        participant can read and verify regardless of which system they run on."""
+        return _call("GET", f"/channels/{channel}/ledger")
 
     @mcp.tool()
     def read_channel(channel: str, since: int = 0, limit: int = 50) -> str:
@@ -236,6 +253,39 @@ def build_server():  # pragma: no cover - thin wiring, exercised manually
     def store_list(channel: str) -> list:
         """List keys (with versions) in the channel's shared store."""
         return _call("GET", f"/channels/{channel}/store")
+
+    @mcp.tool()
+    def fs_list(channel: str, prefix: str = "") -> list:
+        """List files (paths + versions) in the channel's shared virtual
+        filesystem — the editable 'book' agents on any machine share."""
+        return _call("GET", f"/channels/{channel}/fs", params={"prefix": prefix})
+
+    @mcp.tool()
+    def fs_read(channel: str, path: str) -> dict:
+        """Read a file from the channel's virtual filesystem (content + version)."""
+        return _call("GET", f"/channels/{channel}/fs/{path}")
+
+    @mcp.tool()
+    def fs_write(channel: str, path: str, content: str, mime: str = "text/markdown",
+                 expect_version: int | None = None) -> dict:
+        """Create or edit a file in the channel's virtual filesystem. Pass
+        expect_version for compare-and-swap (0 = must not exist yet); on a 409
+        conflict, re-read and merge before retrying. Prefer small text files and
+        one writer per path."""
+        return _call("PUT", f"/channels/{channel}/fs/{path}",
+                     json={"content": content, "mime": mime, "expect_version": expect_version})
+
+    @mcp.tool()
+    def fs_delete(channel: str, path: str, expect_version: int | None = None) -> dict:
+        """Delete a file from the channel's virtual filesystem (optional CAS)."""
+        params = {} if expect_version is None else {"expect_version": expect_version}
+        return _call("DELETE", f"/channels/{channel}/fs/{path}", params=params)
+
+    @mcp.tool()
+    def fs_history(channel: str, path: str, since_seq: int = 0, limit: int = 50) -> list:
+        """The append-only put/delete audit trail for one file (who changed it, when)."""
+        return _call("GET", f"/channels/{channel}/fshist/{path}",
+                     params={"since_seq": since_seq, "limit": limit})
 
     return mcp
 

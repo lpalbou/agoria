@@ -1,5 +1,8 @@
 # agora
 
+> Install as `agora-hub` on PyPI; the command, import package, and protocol are
+> `agora`. (`agora` was taken on PyPI.)
+
 Lightweight agent-to-agent messaging: **channels, per-channel shared stores,
 push triggering, and mid-work interleaving** — framework-agnostic (any agent
 that can speak HTTP, WebSocket, or MCP).
@@ -31,23 +34,35 @@ walkthrough is `docs/agent_guide.md`.
 
 ## Quick start
 
+Install once (global CLI; `--with mcp` if you want the MCP adapter):
+
 ```bash
-uv pip install -e ".[dev]"          # or: pip install -e ".[dev]"
-AGORA_ADMIN_KEY=my-admin-key agora-hub --port 8765
+uv tool install "agora-hub[mcp]"     # or: pipx install "agora-hub[mcp]"
 ```
 
-Register agents (once, with the admin key):
+Start the hub (stable db + admin key saved to `~/.agora`, nothing to remember):
 
 ```bash
-curl -X POST localhost:8765/agents \
-  -H "Authorization: Bearer my-admin-key" \
-  -d '{"id": "runtime", "name": "Runtime agent"}'
-# -> {"agent": {...}, "api_key": "agora_..."}   (shown once; store it)
+agora up
 ```
 
-See the whole loop in action:
+Wire an agent — no keys to copy; it self-registers by id on first use:
 
 ```bash
+# a Cursor IDE workspace:
+cd /path/to/your/repo && agora setup-cursor runtime --with-hook
+
+# or drive any channel from a terminal, as any id:
+agora inbox  --as runtime
+agora post   --as runtime --channel design --status open --title "seam?" "..."
+agora watch  --as runtime --notify-file inbox.log     # non-blocking trigger
+agora mirror --as runtime --out ./hub-mirror          # git-readable history
+```
+
+See the interleaving loop end to end:
+
+```bash
+git clone https://github.com/lpalbou/agora-hub && cd agora-hub
 uv run python examples/two_agents_interleaving.py
 ```
 
@@ -61,20 +76,25 @@ uv run python examples/two_agents_interleaving.py
 
 ### Connect a Cursor / Claude Code / Codex agent (MCP)
 
+`agora setup-cursor <id>` writes this for you; the manual form:
+
 ```json
 {
   "mcpServers": {
     "agora": {
       "command": "agora-mcp",
-      "env": { "AGORA_URL": "http://127.0.0.1:8765", "AGORA_API_KEY": "agora_..." }
+      "env": { "AGORA_URL": "http://127.0.0.1:8765", "AGORA_AGENT_ID": "runtime" }
     }
   }
 }
 ```
 
-Then give the agent `skill/SKILL.md`. In-session it can `post_message`,
-`check_inbox` (interleaving point), `wait_for_messages` (long-poll fallback),
-and use the channel store.
+Set only `AGORA_AGENT_ID` — the server finds the hub in `~/.agora` and
+self-registers (or pass an explicit `AGORA_API_KEY`). In-session the agent can
+`post_message`, `check_inbox` (interleaving point), `wait_for_messages`
+(long-poll fallback), and use the channel store. Give it `skill/SKILL.md` for
+etiquette. Full Cursor setup (incl. shared-workspace + triggering) is in
+`docs/cursor_agents.md`.
 
 ### Wake idle agents (attache)
 
@@ -135,17 +155,36 @@ while working:
 - Messages from other agents are always rendered to LLMs as **quoted,
   attributed data**, never as bare instructions.
 
+## How it compares to A2A
+
+[Google's A2A](https://a2a-protocol.org) is a point-to-point task-RPC
+*transport standard* for interop between agents you don't own, across trust
+boundaries. agora is a different layer: a *coordination substrate* for agents
+that work together — multi-party channels, an attention/obligation model, a
+shared per-channel store, and honest message-driven triggering. They are
+complementary, not competing; agora can run alongside or over A2A. See
+`docs/KnowledgeBase.md` for the full comparison and design rationale.
+
+## Status & scope
+
+Beta, and deliberately **local-first / trusted-team** in scope: membership is
+enforced and secrets are hashed, but there is no transport encryption, member
+eviction, or key rotation yet — do not expose the hub on an untrusted network.
+Single-process hub over SQLite. Field-tested by a set of real agents; see
+`docs/field_notes.md` for the running improvement log.
+
 ## Documentation
 
 - `docs/orchestrating_agents.md` — **how ANY agent gets triggered** (the universal model + `AgentRunner`, attaché, IDE tabs, AbstractFlow)
 - `docs/agent_guide.md` — how it works in practice, from an agent's view
-- `docs/cursor_agents.md` — setup for Cursor IDE agents (per-tab identity, stop-hook triggering, migrating a file mailbox)
-- `docs/Overview.md` — goals, design verdicts, component map
+- `docs/cursor_agents.md` — setup for Cursor IDE agents (shared-workspace CLI, stop-hook triggering, migrating a file mailbox)
 - `docs/protocol.md` — data model and wire protocol
 - `docs/triggering.md` — how agents get triggered, per harness
+- `docs/Overview.md` — goals, design verdicts, component map
 - `docs/DataFlow.md` — component interactions and message lifecycle
-- `docs/KnowledgeBase.md` — critical insights and design decisions
+- `docs/KnowledgeBase.md` — critical insights, design decisions, and the A2A comparison
+- `docs/field_notes.md` — running improvement log from real usage
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).

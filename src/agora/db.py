@@ -70,6 +70,7 @@ CREATE TABLE IF NOT EXISTS messages (
     data        TEXT,
     reply_to    TEXT,
     created_at  REAL NOT NULL,
+    hash        TEXT,               -- per-channel hash chain (ledger/verbatim)
     UNIQUE (channel, seq)
 );
 CREATE INDEX IF NOT EXISTS idx_messages_channel_seq ON messages (channel, seq);
@@ -128,6 +129,12 @@ class Database:
         self._lock = threading.Lock()
         with self._lock:
             self._conn.executescript(_SCHEMA)
+            # Migration: add the ledger hash column to a pre-existing messages
+            # table (older DBs). New rows are chained from here; legacy rows keep
+            # NULL hash and the chain simply starts at the first hashed message.
+            cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(messages)")}
+            if "hash" not in cols:
+                self._conn.execute("ALTER TABLE messages ADD COLUMN hash TEXT")
             self._conn.commit()
 
     # -- agents ------------------------------------------------------------
@@ -187,6 +194,37 @@ class Database:
                 )
             self._conn.commit()
         return Channel(name=name, private=private, created_by=created_by, created_at=now)
+
+    def ensure_channel(self, name: str, private: bool, created_by: str,
+                       add_owner: bool = True) -> tuple[Channel, bool]:
+        """Idempotent get-or-create (used for DMs). Returns (channel, created).
+
+        Uses INSERT OR IGNORE so two agents opening the same direct channel
+        concurrently cannot race into an IntegrityError/500 — the loser simply
+        observes `created=False` and reuses the existing channel. Regular
+        channel creation keeps the strict `create_channel` path (duplicate =
+        error) so name collisions there still surface to the caller.
+        """
+        now = time.time()
+        with self._lock:
+            cur = self._conn.execute(
+                "INSERT OR IGNORE INTO channels (name, private, created_by, created_at)"
+                " VALUES (?,?,?,?)",
+                (name, int(private), created_by, now),
+            )
+            created = cur.rowcount > 0
+            if created and add_owner:
+                self._conn.execute(
+                    "INSERT OR IGNORE INTO members (channel, agent_id, role, joined_at)"
+                    " VALUES (?,?,?,?)",
+                    (name, created_by, "owner", now),
+                )
+            self._conn.commit()
+            row = self._conn.execute("SELECT * FROM channels WHERE name = ?", (name,)).fetchone()
+        return Channel(
+            name=row["name"], private=bool(row["private"]),
+            created_by=row["created_by"], created_at=row["created_at"],
+        ), created
 
     def get_channel(self, name: str) -> Channel | None:
         with self._lock:
@@ -306,12 +344,31 @@ class Database:
 
     # -- messages ------------------------------------------------------------
 
+    @staticmethod
+    def _ledger_payload(**f: Any) -> str:
+        """Canonical, order-stable serialization of a message's immutable fields
+        for the hash chain. Deterministic (sorted keys, compact) so any party can
+        recompute it from the transcript and verify the chain independently."""
+        return json.dumps(f, sort_keys=True, separators=(",", ":"), default=str)
+
+    @classmethod
+    def _ledger_hash(cls, prev_hash: str, *, id: str, channel: str, seq: int, sender: str,
+                     kind: str, status: str, urgency: str, critical: int, downgraded: int,
+                     to: list[str], title: str, body: str, data: Any, reply_to: str | None,
+                     created_at: float) -> str:
+        payload = cls._ledger_payload(
+            id=id, channel=channel, seq=seq, sender=sender, kind=kind, status=status,
+            urgency=urgency, critical=critical, downgraded=downgraded, to=to, title=title,
+            body=body, data=data, reply_to=reply_to, created_at=created_at)
+        return hashlib.sha256((prev_hash + "\n" + payload).encode()).hexdigest()
+
     def insert_message(self, channel: str, sender: str, *, kind: str, status: str,
                        urgency: str, title: str, body: str,
                        data: dict[str, Any] | None, reply_to: str | None,
                        critical: bool = False, downgraded: bool = False,
                        to: list[str] | None = None) -> Message:
-        """Insert atomically with the next per-channel seq (the order authority)."""
+        """Insert atomically with the next per-channel seq (the order authority),
+        chaining the message into the channel's append-only hash ledger."""
         now = time.time()
         msg_id = new_ulid()
         to = to or []
@@ -321,13 +378,22 @@ class Database:
                 (channel,),
             ).fetchone()
             seq = row["next"]
+            prev = self._conn.execute(
+                "SELECT hash FROM messages WHERE channel = ? AND seq = ?", (channel, seq - 1)
+            ).fetchone()
+            prev_hash = prev["hash"] if prev and prev["hash"] else ""
+            msg_hash = self._ledger_hash(
+                prev_hash, id=msg_id, channel=channel, seq=seq, sender=sender, kind=kind,
+                status=status, urgency=urgency, critical=int(critical),
+                downgraded=int(downgraded), to=to, title=title, body=body, data=data,
+                reply_to=reply_to, created_at=now)
             self._conn.execute(
                 "INSERT INTO messages (id, channel, seq, sender, kind, status, urgency,"
-                " critical, downgraded, to_agents, title, body, data, reply_to, created_at)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " critical, downgraded, to_agents, title, body, data, reply_to, created_at, hash)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (msg_id, channel, seq, sender, kind, status, urgency, int(critical),
                  int(downgraded), json.dumps(to), title, body,
-                 json.dumps(data) if data is not None else None, reply_to, now),
+                 json.dumps(data) if data is not None else None, reply_to, now, msg_hash),
             )
             self._conn.commit()
         return Message(
@@ -336,26 +402,64 @@ class Database:
             title=title, body=body, data=data, reply_to=reply_to, created_at=now,
         )
 
+    def channel_ledger(self, channel: str) -> tuple[list[dict[str, Any]], str]:
+        """The channel's verbatim: every message in seq order with its chain
+        hash, plus the head hash (a compact commitment to the whole transcript).
+        This is the durable, replayable common record of a room/session."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, seq, sender, kind, status, title, body, data, reply_to,"
+                " created_at, hash FROM messages WHERE channel = ? ORDER BY seq", (channel,)
+            ).fetchall()
+        entries = []
+        for r in rows:
+            entries.append({
+                "seq": r["seq"], "id": r["id"], "sender": r["sender"], "kind": r["kind"],
+                "status": r["status"], "title": r["title"], "body": r["body"],
+                "data": json.loads(r["data"]) if r["data"] else None,
+                "reply_to": r["reply_to"], "created_at": r["created_at"], "hash": r["hash"],
+            })
+        head = entries[-1]["hash"] if entries else ""
+        return entries, (head or "")
+
+    def verify_channel(self, channel: str) -> dict[str, Any]:
+        """Recompute the hash chain from the stored transcript and confirm it is
+        intact. Detects any post-hoc edit/insert/reorder of a hashed message
+        (its recomputed hash stops matching the stored one). Returns ok, the
+        head hash, the count of chained messages, and the first broken seq."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM messages WHERE channel = ? ORDER BY seq", (channel,)
+            ).fetchall()
+        prev_hash = ""
+        chained = 0
+        broken_at: int | None = None
+        head = ""
+        for r in rows:
+            if r["hash"] is None:  # legacy pre-ledger row: chain starts after it
+                prev_hash = ""
+                continue
+            m = self._row_to_message(r)
+            expect = self._ledger_hash(
+                prev_hash, id=m.id, channel=m.channel, seq=m.seq, sender=m.sender,
+                kind=m.kind.value if hasattr(m.kind, "value") else m.kind,
+                status=m.status.value if hasattr(m.status, "value") else m.status,
+                urgency=m.urgency.value if hasattr(m.urgency, "value") else m.urgency,
+                critical=int(m.critical), downgraded=int(m.downgraded), to=m.to,
+                title=m.title, body=m.body, data=m.data, reply_to=m.reply_to,
+                created_at=m.created_at)
+            if expect != r["hash"] and broken_at is None:
+                broken_at = m.seq
+            prev_hash = r["hash"]
+            head = r["hash"]
+            chained += 1
+        return {"ok": broken_at is None, "head": head, "count": chained,
+                "broken_at": broken_at}
+
     def get_message(self, message_id: str) -> Message | None:
         with self._lock:
             row = self._conn.execute("SELECT * FROM messages WHERE id = ?", (message_id,)).fetchone()
         return self._row_to_message(row) if row else None
-
-    def has_reply(self, message_id: str, exclude_sender: str | None = None) -> bool:
-        """Whether an answer to `message_id` exists. `exclude_sender` (the
-        original asker) is ignored so an asker cannot silence its own
-        obligation's escalation with a self-follow-up."""
-        with self._lock:
-            if exclude_sender is None:
-                row = self._conn.execute(
-                    "SELECT 1 FROM messages WHERE reply_to = ? LIMIT 1", (message_id,)
-                ).fetchone()
-            else:
-                row = self._conn.execute(
-                    "SELECT 1 FROM messages WHERE reply_to = ? AND sender != ? LIMIT 1",
-                    (message_id, exclude_sender),
-                ).fetchone()
-        return row is not None
 
     def get_messages(self, channel: str, since_seq: int = 0, limit: int = 200) -> list[Message]:
         with self._lock:
@@ -419,12 +523,24 @@ class Database:
             ).fetchall()
         return [self._row_to_message(r) for r in rows]
 
-    def unread_obligations(self, agent_id: str, channels: list[str]) -> list[Message]:
-        """Outstanding obligations addressed to the agent's channels: status
-        open/blocked, not sent by the agent, with no reply from anyone else,
-        and not yet read by the agent. These stay pinned regardless of the
-        triage cursor — so acking an envelope can no longer bury a rotting
-        obligation (v0.3 bug C-4). They clear when read or when answered."""
+    def replies_to(self, message_id: str) -> list[Message]:
+        """All messages replying to `message_id`, in channel (seq) order. Used to
+        compute per-ask obligation discharge (uses idx_messages_reply_to)."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM messages WHERE reply_to = ? ORDER BY seq", (message_id,)
+            ).fetchall()
+        return [self._row_to_message(r) for r in rows]
+
+    def unread_obligation_candidates(self, agent_id: str, channels: list[str]) -> list[Message]:
+        """CANDIDATE obligations to the agent's channels: status open/blocked,
+        not sent by the agent, and not yet read by the agent. The 'is it
+        answered?' test is applied by the service via `discharge_state`, because
+        structured asks need per-ask discharge (a partial answer must keep the
+        message pinned) — a single SQL 'any reply exists' cannot express that.
+        These stay pinned regardless of the triage cursor, so acking an envelope
+        cannot bury a rotting obligation (v0.3 bug C-4); they clear when the
+        agent reads the message or when every ask is answered."""
         if not channels:
             return []
         placeholders = ",".join("?" for _ in channels)
@@ -436,8 +552,6 @@ class Database:
                   AND m.channel IN ({placeholders})
                   AND NOT EXISTS (SELECT 1 FROM reads r
                                   WHERE r.message_id = m.id AND r.agent_id = ?)
-                  AND NOT EXISTS (SELECT 1 FROM messages rep
-                                  WHERE rep.reply_to = m.id AND rep.sender != m.sender)
                 ORDER BY m.created_at
                 """,
                 (agent_id, *channels, agent_id),
@@ -509,10 +623,112 @@ class Database:
                           updated_by=updated_by, updated_at=now)
 
     def store_keys(self, channel: str) -> list[dict[str, Any]]:
+        # Virtual-filesystem keys (fs/<path>) are excluded: they belong to the
+        # fs_* API and namespace, not the generic KV store, so they never leak
+        # into the store listing (namespace hygiene — independent-tester nuance).
         with self._lock:
             rows = self._conn.execute(
-                "SELECT key, version, updated_by, updated_at FROM store WHERE channel = ? ORDER BY key",
+                "SELECT key, version, updated_by, updated_at FROM store"
+                " WHERE channel = ? AND key NOT LIKE 'fs/%' ORDER BY key",
                 (channel,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    # -- virtual filesystem storage (monotonic version, tombstone delete) --------
+    #
+    # Files reuse the `store` table but need a version that is monotonic across
+    # a path's ENTIRE lifetime, not per-row. A plain delete + recreate would
+    # reset the version to 1, so a stale pre-delete version could pass a CAS
+    # check and clobber the recreated file (an ABA hazard found by an
+    # independent tester). Fix: delete is a TOMBSTONE (the row persists with a
+    # `deleted` marker and a bumped version), so the version never rewinds and
+    # CAS remains a valid fencing token across delete/recreate cycles.
+
+    def fs_get(self, channel: str, key: str) -> dict[str, Any] | None:
+        """Return {value, version, updated_by, updated_at, deleted} or None."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT value, version, updated_by, updated_at FROM store"
+                " WHERE channel = ? AND key = ?", (channel, key)
+            ).fetchone()
+        if row is None:
+            return None
+        value = json.loads(row["value"])
+        return {"value": value, "version": row["version"], "updated_by": row["updated_by"],
+                "updated_at": row["updated_at"],
+                "deleted": bool(isinstance(value, dict) and value.get("deleted"))}
+
+    def fs_put(self, channel: str, key: str, value: dict[str, Any], updated_by: str,
+               expect_version: int | None = None) -> StoreEntry:
+        """Create/overwrite a file. `expect_version` semantics: for a live file
+        it must equal the current version; for an absent-or-tombstoned path
+        (creation) it must be 0. The new version always continues the path's
+        monotonic sequence (current + 1), never resetting to 1."""
+        now = time.time()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT value, version FROM store WHERE channel = ? AND key = ?",
+                (channel, key),
+            ).fetchone()
+            current = row["version"] if row else 0
+            is_deleted = bool(row and isinstance(json.loads(row["value"]), dict)
+                              and json.loads(row["value"]).get("deleted"))
+            exists_live = row is not None and not is_deleted
+            if expect_version is not None:
+                # Creation (absent/tombstoned) requires 0; editing a live file
+                # requires the exact current version. Either way a mismatch is a
+                # conflict reporting the true current version.
+                want = current if exists_live else 0
+                if expect_version != want:
+                    raise StoreConflict(current)
+            new_version = current + 1
+            self._conn.execute(
+                "INSERT INTO store (channel, key, value, version, updated_by, updated_at)"
+                " VALUES (?,?,?,?,?,?)"
+                " ON CONFLICT (channel, key) DO UPDATE SET"
+                " value=excluded.value, version=excluded.version,"
+                " updated_by=excluded.updated_by, updated_at=excluded.updated_at",
+                (channel, key, json.dumps(value), new_version, updated_by, now),
+            )
+            self._conn.commit()
+        return StoreEntry(channel=channel, key=key, value=value, version=new_version,
+                          updated_by=updated_by, updated_at=now)
+
+    def fs_remove(self, channel: str, key: str, updated_by: str,
+                  expect_version: int | None = None) -> int | None:
+        """Tombstone a live file (CAS via `expect_version`). Returns the new
+        (bumped) version, or None if the path was absent or already deleted."""
+        now = time.time()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT value, version FROM store WHERE channel = ? AND key = ?",
+                (channel, key),
+            ).fetchone()
+            if row is None:
+                return None
+            if isinstance(json.loads(row["value"]), dict) and json.loads(row["value"]).get("deleted"):
+                return None  # already a tombstone
+            if expect_version is not None and expect_version != row["version"]:
+                raise StoreConflict(row["version"])
+            new_version = row["version"] + 1
+            self._conn.execute(
+                "UPDATE store SET value=?, version=?, updated_by=?, updated_at=?"
+                " WHERE channel = ? AND key = ?",
+                (json.dumps({"deleted": True}), new_version, updated_by, now, channel, key),
+            )
+            self._conn.commit()
+        return new_version
+
+    def fs_keys_live(self, channel: str, prefix: str) -> list[dict[str, Any]]:
+        """List non-tombstoned file keys under a prefix (deleted files excluded
+        server-side via json_extract, so a lister never sees a removed file)."""
+        pattern = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT key, version, updated_by, updated_at FROM store"
+                " WHERE channel = ? AND key LIKE ? ESCAPE '\\'"
+                " AND COALESCE(json_extract(value, '$.deleted'), 0) = 0 ORDER BY key",
+                (channel, pattern),
             ).fetchall()
         return [dict(r) for r in rows]
 
@@ -537,6 +753,20 @@ class Database:
             )
             self._conn.commit()
 
+    def checkpoint(self) -> None:
+        """Fold the WAL back into the main database file. Called on graceful
+        shutdown so a backup that copies only `agora.db` is complete and the
+        WAL does not grow unbounded across a long-lived hub's lifetime."""
+        with self._lock:
+            self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+    def ping(self) -> bool:
+        """Cheap liveness probe for /healthz."""
+        with self._lock:
+            self._conn.execute("SELECT 1")
+        return True
+
     def close(self) -> None:
         with self._lock:
+            self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             self._conn.close()

@@ -167,3 +167,130 @@ def test_message_size_cap(service, agents):
     with pytest.raises(HubError) as e:
         service.post_message(alice, "design", PostMessage(body="x" * 70_000))
     assert e.value.status_code == 413
+
+
+# -- remote-readiness regressions (v0.4.7) -------------------------------------
+
+
+def test_ack_inbox_clamps_to_channel_head(service, agents):
+    """A buggy/hand-written client that acks far past the channel head must not
+    leapfrog its cursor: messages that arrive later (below the inflated seq)
+    would otherwise be permanently hidden. The hub clamps ack to the head."""
+    alice, bob = agents
+    token = service.create_invite(alice, "design", invitee="bob")
+    service.join_channel(bob, "design", invite_token=token)
+    service.post_message(alice, "design", PostMessage(body="one", status=Status.fyi))
+    service.ack_inbox(bob, {"design": 10_000})           # absurd forward ack
+    service.post_message(alice, "design", PostMessage(body="two", status=Status.fyi))
+    assert any(e.body == "two" for e in service.inbox(bob))  # still visible
+
+
+def test_subscribe_backlog_is_fully_paginated(service, agents):
+    """Reconnect catch-up must return EVERY missed message, not just one page
+    (default page size is 200). A remote agent whose link flapped for a while
+    cannot be allowed to silently lose the tail of the backlog."""
+    alice, bob = agents
+    token = service.create_invite(alice, "design", invitee="bob")
+    service.join_channel(bob, "design", invite_token=token)
+    for i in range(250):  # insert directly to bypass the post rate limiter
+        service.db.insert_message("design", "alice", kind="message", status="fyi",
+                                  urgency="inbox", title="", body=f"m{i}",
+                                  data=None, reply_to=None)
+    queue: asyncio.Queue = asyncio.Queue()
+    backlog = service.subscribe(bob, ["design"], queue, since={"design": 0})
+    assert len([m for m in backlog if m.body.startswith("m")]) == 250
+
+
+def test_closed_channel_refuses_new_posts(service, agents):
+    """Channel lifecycle (the room-bus primitive): a closed channel refuses new
+    member posts with 409 — so a subscriber cannot post into a room whose
+    session ended. Reopening restores posting. Owner-controlled via meta."""
+    alice, bob = agents
+    token = service.create_invite(alice, "design", invitee="bob")
+    service.join_channel(bob, "design", invite_token=token)
+    assert service.post_message(bob, "design", PostMessage(body="while open")).seq > 0
+    # Owner closes the channel (its session ended).
+    service.store_set(alice, "design", "channel:meta", {"state": "closed"})
+    assert service.channel_info(bob, "design")["state"] == "closed"
+    with pytest.raises(HubError) as e:
+        service.post_message(bob, "design", PostMessage(body="after close"))
+    assert e.value.status_code == 409
+    # Reopening restores posting.
+    service.store_set(alice, "design", "channel:meta", {"state": "open"})
+    assert service.post_message(bob, "design", PostMessage(body="reopened")).seq > 0
+
+
+def test_channel_state_must_be_valid(service, agents):
+    alice, _ = agents
+    with pytest.raises(HubError) as e:
+        service.store_set(alice, "design", "channel:meta", {"state": "paused"})
+    assert e.value.status_code == 400
+
+
+# -- verbatim ledger (hash-chained room-session record) ------------------------
+
+
+def test_ledger_is_complete_ordered_and_verifies(service, agents):
+    alice, bob = agents
+    token = service.create_invite(alice, "design", invitee="bob")
+    service.join_channel(bob, "design", invite_token=token)
+    a = service.post_message(alice, "design", PostMessage(body="turn one"))
+    b = service.post_message(bob, "design", PostMessage(body="turn two"))
+    led = service.channel_ledger(bob, "design")
+    # Every turn is present, in seq order, each with a chain hash.
+    seqs = [t["seq"] for t in led["turns"]]
+    assert seqs == sorted(seqs)
+    bodies = [t["body"] for t in led["turns"]]
+    assert "turn one" in bodies and "turn two" in bodies
+    assert all(t["hash"] for t in led["turns"])
+    # The head commits to the whole transcript and the chain verifies intact.
+    assert led["verified"] is True and led["broken_at"] is None
+    assert led["head"] == led["turns"][-1]["hash"]
+
+
+def test_ledger_head_advances_and_chain_links(service, agents):
+    alice, _ = agents
+    h1 = service.channel_ledger(alice, "design")["head"]
+    service.post_message(alice, "design", PostMessage(body="x"))
+    h2 = service.channel_ledger(alice, "design")["head"]
+    assert h2 and h2 != h1  # a new turn advances the head
+
+
+def test_ledger_detects_tampering(service, agents):
+    """Editing a stored turn after the fact breaks the chain — the recomputed
+    hash no longer matches, so verify flags exactly where the record diverged."""
+    alice, _ = agents
+    m = service.post_message(alice, "design", PostMessage(body="original"))
+    service.post_message(alice, "design", PostMessage(body="after"))
+    # Simulate out-of-band tampering with the stored transcript.
+    with service.db._lock:
+        service.db._conn.execute("UPDATE messages SET body = ? WHERE id = ?",
+                                 ("forged", m.id))
+        service.db._conn.commit()
+    v = service.db.verify_channel("design")
+    assert v["ok"] is False and v["broken_at"] == m.seq
+
+
+def test_ledger_requires_membership(service, agents):
+    alice, _ = agents
+    outsider, _ = service.register_agent("mallory", "M")
+    with pytest.raises(HubError) as e:
+        service.channel_ledger(outsider, "design")
+    assert e.value.status_code == 403
+
+
+def test_open_dm_is_idempotent_and_rejoinable(service, agents):
+    """Concurrent/repeat first-contact must not 500, and a peer that left a DM
+    can always re-open it (membership is re-asserted every call)."""
+    alice, bob = agents
+    first = service.open_dm(alice, "bob")
+    dm = first["channel"]["name"]
+    assert dm.startswith("dm:")
+    # Opening again from either side is a no-op get-or-create, never an error.
+    again = service.open_dm(bob, "alice")
+    assert again["channel"]["name"] == dm
+    # A left peer can re-open (the dead-end the trust review flagged).
+    service.leave_channel(bob, dm)
+    assert not service.db.is_member(dm, "bob")
+    service.open_dm(bob, "alice")
+    assert service.db.is_member(dm, "bob")

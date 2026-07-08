@@ -79,9 +79,13 @@ class AgoraClient:
     async def post(self, channel: str, body: str, *, title: str = "",
                    status: Status = Status.fyi, urgency: Urgency = Urgency.inbox,
                    to: list[str] | None = None, critical: bool = False,
-                   data: dict[str, Any] | None = None, reply_to: str | None = None) -> Message:
+                   data: dict[str, Any] | None = None, reply_to: str | None = None,
+                   asks: list[dict[str, Any]] | None = None,
+                   answers: list[str] | None = None,
+                   signature: str | None = None) -> Message:
         payload = PostMessage(body=body, title=title, status=status, urgency=urgency,
-                              to=to or [], critical=critical, data=data, reply_to=reply_to)
+                              to=to or [], critical=critical, data=data, reply_to=reply_to,
+                              asks=asks, answers=answers, signature=signature)
         row = self._json(await self._http.post(
             f"/channels/{channel}/messages", json=payload.model_dump(mode="json"),
         ))
@@ -156,6 +160,41 @@ class AgoraClient:
     async def store_keys(self, channel: str) -> list[dict[str, Any]]:
         return self._json(await self._http.get(f"/channels/{channel}/store"))
 
+    # -- per-channel virtual filesystem (shared editable "book", any machine) ------
+
+    async def fs_list(self, channel: str, prefix: str = "") -> list[dict[str, Any]]:
+        return self._json(await self._http.get(f"/channels/{channel}/fs",
+                                               params={"prefix": prefix}))
+
+    async def fs_read(self, channel: str, path: str) -> dict[str, Any]:
+        return self._json(await self._http.get(f"/channels/{channel}/fs/{path}"))
+
+    async def fs_write(self, channel: str, path: str, content: str, *,
+                       mime: str = "text/markdown",
+                       expect_version: int | None = None) -> dict[str, Any]:
+        return self._json(await self._http.put(
+            f"/channels/{channel}/fs/{path}",
+            json={"content": content, "mime": mime, "expect_version": expect_version},
+        ))
+
+    async def fs_delete(self, channel: str, path: str, *,
+                        expect_version: int | None = None) -> dict[str, Any]:
+        params = {} if expect_version is None else {"expect_version": expect_version}
+        return self._json(await self._http.request(
+            "DELETE", f"/channels/{channel}/fs/{path}", params=params))
+
+    async def fs_history(self, channel: str, path: str, *,
+                        since_seq: int = 0, limit: int = 200) -> list[dict[str, Any]]:
+        return self._json(await self._http.get(
+            f"/channels/{channel}/fshist/{path}",
+            params={"since_seq": since_seq, "limit": limit}))
+
+    async def ledger(self, channel: str, *, verify: bool = True) -> dict[str, Any]:
+        """The channel's verbatim ledger: full ordered transcript + hash-chain
+        head (the durable common record of a room/session)."""
+        return self._json(await self._http.get(
+            f"/channels/{channel}/ledger", params={"verify": verify}))
+
     async def set_presence(self, state: str) -> None:
         self._json(await self._http.put("/presence", json={"state": state}))
 
@@ -177,10 +216,40 @@ class AgoraClient:
             self._seen.setdefault(chan, seq)
         await self._open_ws()
         self._listener = asyncio.create_task(self._run())
+        # Cold-start catch-up: on a fresh process the local high-water is empty,
+        # so the WS subscribe requests no backlog and anything posted while this
+        # client was down would never be pushed. A one-shot REST inbox sweep
+        # recovers that gap window; the accept-gate dedups against live frames.
+        # This is what makes AgentRunner and any long-lived client gap-free
+        # across restarts and network flaps (previously only `agora watch` had it).
+        await self._catch_up()
+
+    async def _catch_up(self) -> None:
+        try:
+            rows = self._json(await self._http.get("/inbox"))
+        except Exception:
+            return  # best-effort; the WS + next reconnect still cover it
+        for row in rows:
+            self._accept(Envelope(**row))
+
+    def _ws_url(self) -> str:
+        # Map scheme explicitly: https->wss, http->ws. The old blanket
+        # replace("http","ws") turned "https://" into "wsss://" (invalid),
+        # silently breaking push for any TLS-terminated remote hub.
+        base = self.base_url
+        if base.startswith("https://"):
+            return "wss://" + base[len("https://"):]
+        if base.startswith("http://"):
+            return "ws://" + base[len("http://"):]
+        return base
 
     async def _open_ws(self) -> None:
-        ws_url = self.base_url.replace("http", "ws", 1) + f"/ws?token={self.api_key}"
-        self._ws = await websockets.connect(ws_url)
+        # The bearer key travels in the Authorization header (not the query
+        # string) so it does not leak into proxy/access logs on remote links.
+        ws_url = self._ws_url() + "/ws"
+        self._ws = await websockets.connect(
+            ws_url, additional_headers={"Authorization": f"Bearer {self.api_key}"},
+        )
         self._subscribed = set()
         await self.subscribe(list(self._desired), since=dict(self._seen))
 
@@ -223,13 +292,18 @@ class AgoraClient:
         async for raw in self._ws:
             frame = json.loads(raw)
             if frame.get("type") == "envelope":
-                envelope = Envelope(**frame["envelope"])
-                # At-least-once delivery: drop anything already seen.
-                if envelope.seq <= self._seen.get(envelope.channel, 0):
-                    continue
-                self._note_seen(envelope)
-                if envelope.sender != self.agent_id:
-                    self.inbox.deliver(envelope)
+                self._accept(Envelope(**frame["envelope"]))
+
+    def _accept(self, envelope: Envelope) -> None:
+        """Single delivery gate for both the live listener and the connect-time
+        catch-up sweep: dedup by per-channel seq (at-least-once), advance the
+        local high-water, and deliver anything not sent by us. Synchronous, so
+        concurrent live + sweep delivery cannot race on `_seen`."""
+        if envelope.seq <= self._seen.get(envelope.channel, 0):
+            return
+        self._note_seen(envelope)
+        if envelope.sender != self.agent_id:
+            self.inbox.deliver(envelope)
 
     def _note_seen(self, item: Message | Envelope) -> None:
         if item.seq > self._seen.get(item.channel, 0):

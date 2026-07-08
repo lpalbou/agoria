@@ -97,12 +97,24 @@ class Context:
         return self.runner.client
 
     async def body(self) -> str:
-        """The message body. Envelopes elide large bodies; this fetches on
-        demand (and returns the reply-chain-aware text)."""
+        """The RAW message body (reply-chain-aware). Convenient for programmatic
+        handling, but it is untrusted peer text — if you feed it into an LLM's
+        context, prefer `safe_body()`, which fences it as quoted data so a
+        message cannot inject instructions into your model."""
         if self.envelope.body is not None:
             return self.envelope.body
         chain = await self.client.read(self.channel, self.envelope.id)
         return "\n\n".join(m.body for m in chain)
+
+    async def safe_body(self) -> str:
+        """The triggering message (+ unread reply chain) rendered as
+        nonce-fenced QUOTED DATA — the same injection-safe boundary the MCP,
+        CLI and attaché paths use (agora/render.py). Use this whenever peer
+        content enters an LLM context on the AgentRunner path; previously the
+        runner had no fenced accessor, so handlers fed raw text to their model."""
+        from .render import render_messages
+        chain = await self.client.read(self.channel, self.envelope.id)
+        return render_messages([m.model_dump(mode="json") for m in chain])
 
     async def reply(self, body: str, *, status: Status = Status.reply,
                     urgency: Urgency = Urgency.inbox, data: dict | None = None,
@@ -128,6 +140,22 @@ class Context:
 
     async def store_set(self, key: str, value: Any, expect_version: int | None = None):
         return await self.client.store_set(self.channel, key, value, expect_version)
+
+    # -- channel virtual filesystem (shared editable workspace, any machine) -------
+
+    async def fs_list(self, prefix: str = "") -> list[dict[str, Any]]:
+        return await self.client.fs_list(self.channel, prefix)
+
+    async def fs_read(self, path: str) -> dict[str, Any]:
+        return await self.client.fs_read(self.channel, path)
+
+    async def fs_write(self, path: str, content: str, *, mime: str = "text/markdown",
+                       expect_version: int | None = None) -> dict[str, Any]:
+        return await self.client.fs_write(self.channel, path, content, mime=mime,
+                                          expect_version=expect_version)
+
+    async def fs_delete(self, path: str, *, expect_version: int | None = None) -> dict[str, Any]:
+        return await self.client.fs_delete(self.channel, path, expect_version=expect_version)
 
     async def note(self, subject: str, text: str) -> None:
         await self.client.set_note(subject, text)
@@ -203,8 +231,12 @@ class AgentRunner:
             self._ack(env)
             return
         if not self._budget.allow():
-            self._log("turn budget exhausted — skipping (halts runaway loops)")
-            self._ack(env)
+            # Do NOT ack: acking advances the hub cursor and would permanently
+            # drop a message we never handled. Leaving it unacked keeps it
+            # recoverable — the connect-time catch-up re-delivers it on the next
+            # (re)connection, and an open/blocked obligation stays sticky on the
+            # hub regardless. The budget is a runaway-loop brake, not a dropper.
+            self._log("turn budget exhausted — deferring unacked (halts runaway loops)")
             return
         ctx = Context(self, env, self.agent_id)
         await self.client.set_presence("working")

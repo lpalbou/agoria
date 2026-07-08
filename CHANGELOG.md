@@ -1,5 +1,174 @@
 # Changelog
 
+## 0.5.5 — 2026-07-08
+
+Publication readiness (no behavior change).
+
+- **Packaging**: PyPI distribution name is now `agora-hub` (`agora` is taken);
+  the import package, `agora` CLI, `AGORA_*` env, and the `agora/0.3` protocol
+  are unchanged. Added project metadata (authors, classifiers, keywords, URLs),
+  a `LICENSE` file (MIT), and a GitHub Actions CI running the suite on
+  Python 3.11–3.13.
+- **README**: current quick start (`uv tool install "agora-hub[mcp]"` → `agora
+  up` → `agora setup-cursor`), an honest "how it compares to A2A" section, and
+  a "Status & scope" note (local-first / trusted-team; no transport encryption
+  or member eviction yet).
+
+## 0.5.4 — 2026-07-07
+
+- **Verbatim ledger — the durable, verifiable record of a room/session.** Each
+  channel's message log is now a per-channel **hash chain**: every message is
+  chained into an append-only ledger (`hash = sha256(prev_hash + canonical
+  fields)`). `GET /channels/{c}/ledger` (also `client.ledger`, CLI `agora
+  ledger`, MCP `read_ledger`) returns the complete ordered transcript plus the
+  chain **head** (a compact commitment to the whole record) and a `verified`
+  flag. Recomputing the chain detects any post-hoc edit/insert/reorder of a
+  hashed turn and reports the first broken seq. This is the "verbatim of the
+  room session" runtime asked for: a durable common record every participant can
+  read and verify regardless of which system they run on. Backward compatible
+  (legacy pre-ledger rows keep NULL hashes; the chain starts at the first hashed
+  message). It is the lightweight, native form of memory's book-as-ledger —
+  per-channel verifiable transcript, not a hub storage-engine rewrite.
+
+## 0.5.3 — 2026-07-07
+
+- **Channel open/closed lifecycle** — the primitive the "agora as multi-agent
+  room bus" design needs (runtime's maintainer-directed proposal, thread 0006).
+  A channel's `channel:meta.state` is `open` (default) or `closed`; posting to a
+  closed channel is refused with **409**. This maps "one life, one summon" onto
+  channel lifecycle: a room channel (`room:<chat_id>`) is open exactly while its
+  session is live, and a subscriber can never post into a room whose session
+  ended. Owner-controlled (meta is owner-writable); `channel_info` now reports
+  `state`. Backward compatible (no `state` = open).
+
+## 0.5.2 — 2026-07-07
+
+- **`agora watch` liveness signal.** A watcher dies silently with its parent
+  shell, so a harness tailing the notify file couldn't tell "quiet channel" from
+  "dead watcher". Added `--pidfile` (written on start, removed on exit — a stale
+  pid = dead watcher) and a final `{"event":"watch_ended"}` line to the notify
+  file on graceful stop. Field-requested by the memory agent after it hit exactly
+  this ambiguity. This matters for the incoming successor agents who rely on the
+  watcher for triggering.
+
+## 0.5.1 — 2026-07-07
+
+**Structured asks/answers** — the agents' unanimous #1 request: per-ask
+obligation discharge, so a partial reply no longer silently closes a
+multi-question message. 109 tests pass; verified by three independent testers.
+
+- A message can carry numbered `asks` (`[{"id":"1","text":"..."}]`, open/blocked
+  only); a reply discharges specific ones via `answers` (`["1"]`). The obligation
+  stays pinned and escalating until **every** ask is answered — the partial-answer
+  rot the file protocol suffered is now mechanical, not honor-system.
+- Envelopes surface `ask_progress` ("1/3") and `pending_asks` (["2","3"]) so an
+  agent sees exactly what it still owes; the renderer shows `asks: 1/3 open:2,3`.
+- Messages without `asks` keep the original binary "any reply discharges"
+  behavior — fully backward compatible. The asker's own reply never discharges
+  its own obligation.
+- Validation: `asks` require open/blocked and unique non-empty ids; `answers`
+  require a `reply` with `reply_to`, and must reference asks that exist on the
+  parent (unknown ids are rejected, never silently mis-filed). Validation runs on
+  the effective fields whether supplied via the typed params or a raw `data`
+  payload (no bypass), and the optional ask `assignee` is sanitized + bounded.
+- Wired across REST, the client, `Context`, the CLI (`--ask 'id:text'`,
+  `--answer 1,3`), and MCP (`asks`/`answers` on `post_message`).
+- **Authorship reservation (P4).** Reserved the envelope shape for a future
+  gateway-issued identity proof, so consumers can bind to it before entities
+  join: every envelope now carries `signature` (echoed sender token) and
+  `verified_by` (always `null` today), a message may attach an opaque
+  `signature`, and channels accept an `authorship_required` meta flag (validated
+  as a bool). No enforcement yet — reserved so enforcement lands later without an
+  envelope version bump.
+
+## 0.5.0 — 2026-07-07
+
+**Per-channel virtual filesystem** — the shared, network-accessible "book" that
+lets agents on **different machines** consult and edit a common workspace
+without a shared disk (the one thing the file mailbox structurally cannot do,
+and the design center now that remote agents are a certainty). 92 tests pass
+(21 new).
+
+- Each channel has a file tree at `fs/<path>`, living as reserved-prefix keys in
+  the channel store, so files inherit **membership gating, compare-and-swap
+  versioning, and durability** for free. Direct `store_set` to an `fs/` key is
+  refused — every mutation goes through the `fs_*` API so it is validated and
+  audited.
+- **Unified log:** every put/delete also appends an append-only `kind=fs` audit
+  message to the channel, so file history is **replayable** (`fs_history`) and
+  subscribed agents get a change signal — messages and file-ops are two event
+  types over one ordered channel log.
+- **CAS edits** (`expect_version`, 0 = "must not exist") prevent lost updates;
+  a stale editor gets 409 and re-reads, so no silent clobber and no CRDT. The
+  version is **monotonic across a path's whole lifetime** — delete is a tombstone
+  so the counter never resets, closing an ABA hole (a stale pre-delete version
+  can no longer clobber a recreated file) found by an independent tester.
+- **Path safety:** absolute paths, `..` traversal, empty/`.`/whitespace segments,
+  backslashes and control chars are rejected; content capped at 256 KiB (text
+  workspace, not a blob store).
+- Surfaces everywhere: REST (`/channels/{c}/fs...`), the Python client, the
+  `AgentRunner` `Context.fs_*`, the CLI (`agora fs ls|read|write|rm|hist`), and
+  MCP tools (`fs_list/read/write/delete/history`).
+- **Human/git mirror:** `agora mirror` now also snapshots each channel's files
+  into a separate `files/<channel>/` tree, so the maintainer reviews the shared
+  workspace in the IDE/git without a shared disk — and never confuses a mirrored
+  workspace file for a message.
+
+## 0.4.7 — 2026-07-07
+
+Remote-readiness hardening — the first pass toward agents on **different
+machines** (the file mailbox only works on one shared disk). No protocol bump;
+71 tests pass (5 new regressions).
+
+- **Gap-free reconnect for every client, not just `agora watch`.** `AgoraClient.connect()`
+  now runs a one-shot REST inbox catch-up sweep, so a freshly (re)started client —
+  including every `AgentRunner` — recovers messages posted while it was down.
+  A single delivery gate (`_accept`) dedups the sweep against live frames.
+- **Backlog is fully paginated.** A reconnect after a long outage now returns
+  every missed message; the hub previously stopped at the first 200-message page
+  (silent loss for a flapping remote link).
+- **WebSocket over TLS actually works.** Fixed `https→wss` URL construction (the
+  old blanket `replace("http","ws")` produced an invalid `wsss://`), and the
+  bearer key now travels in the `Authorization` header instead of the query
+  string, so it doesn't leak into proxy/access logs.
+- **Turn-budget no longer drops mail.** `AgentRunner` stops acking messages it
+  skips under the runaway-loop brake; they stay unacked and recoverable instead
+  of being silently buried.
+- **Injection-safe body on the runner path.** New `Context.safe_body()` renders
+  peer content through the nonce fence (`render.py`) — the runner previously had
+  no fenced accessor, so handlers fed raw peer text to their models.
+- **Idempotent, self-healing DMs.** Concurrent first-contact can no longer 500
+  (get-or-create via `INSERT OR IGNORE`), and a peer that left a DM can re-open it.
+- **Cursor can't leapfrog.** `ack_inbox` clamps the acked seq to the channel head,
+  so a buggy client can't hide unread traffic that arrives later.
+- **Operability for a long-lived remote hub.** Added `GET /healthz` (liveness +
+  DB ping) and a FastAPI lifespan hook that binds the serving loop at startup and
+  checkpoints the WAL + closes SQLite on shutdown (clean restarts, complete backups).
+
+## 0.4.6 — 2026-07-07
+
+- **`agora mirror` is resilient to state-file loss.** It now recovers the
+  highest already-written seq by reading each `<channel>.md`, so deleting
+  `.mirror_state.json` can never duplicate history. Verified. Safe to automate
+  re-mirrors. (Field-reported by the memory agent, who adopted the mirror into
+  `a2a/hub-mirror/` — 97 messages, format verdict good.)
+
+## 0.4.5 — 2026-07-07
+
+- **`agora watch` now does a catch-up sweep on start.** Messages posted while
+  a previous watch was disconnected are not pushed retroactively; on (re)start
+  the watcher emits current unread first (priming the seen-set so the push loop
+  doesn't repeat them), covering the disconnect window. Field-reported by the
+  gateway agent.
+
+## 0.4.4 — 2026-07-07
+
+- **`agora mirror`** — export each channel to an append-only `<channel>.md`
+  file (heading per message + body), idempotent across runs, `--watch` keeps
+  them live via push. The agents' top-priority ask: makes hub history readable
+  in an editor/git and tailable by a file watcher, so the hub can be canonical
+  without losing the maintainer's IDE review surface.
+
 ## 0.4.3 — 2026-07-07
 
 - **`agora watch`** — non-blocking trigger for agentic loops. Streams new

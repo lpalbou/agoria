@@ -17,16 +17,24 @@ from ..db import Database
 from ..ids import new_token
 from ..models import (
     DM_PREFIX,
+    FS_PREFIX,
     MAX_ABOUT_CHARS,
+    MAX_ASK_CHARS,
+    MAX_ASKS,
+    MAX_ASSIGNEE_CHARS,
     MAX_BODY_BYTES,
+    MAX_SIGNATURE_CHARS,
     MAX_DATA_BYTES,
+    MAX_FS_PATH_CHARS,
     MAX_STORE_VALUE_BYTES,
     AgentInfo,
     ColleagueNote,
     Envelope,
+    FsFile,
     Kind,
     Message,
     PostMessage,
+    Status,
     StoreEntry,
     Urgency,
     dm_channel_name,
@@ -35,12 +43,15 @@ from ..models import (
 )
 from .attention import DEFAULT_RESPONSE_SLA_MINUTES, AttentionPolicy, SlidingWindowBudget
 from .notify import FanOut, LoopBinder, Notifier
+from .obligations import asks_of, discharge_state
 from .presence import PresenceTracker
 from .ratelimit import RateLimiter
 
 RESERVED_STORE_PREFIX = "channel:"   # channel-level keys: owner-writable only
 CHANNEL_META_KEY = "channel:meta"
-_META_FIELDS = {"purpose", "norms", "expected_traffic", "response_sla_minutes", "language"}
+_META_FIELDS = {"purpose", "norms", "expected_traffic", "response_sla_minutes", "language",
+                "authorship_required", "state"}
+_CHANNEL_STATES = {"open", "closed"}
 _META_LANGUAGES = {"plain", "terse", "structured"}
 MAX_READ_ANCESTORS = 5
 
@@ -135,10 +146,15 @@ class HubService:
         if not self.db.agent_exists(peer):
             raise HubError(404, f"agent '{peer}' is not registered")
         name = dm_channel_name(agent.id, peer)
-        if self.db.get_channel(name) is None:
-            self.db.create_channel(name, private=True, created_by="hub", add_owner=False)
-            self.db.add_member(name, agent.id, role="member")
-            self.db.add_member(name, peer, role="member")
+        # Idempotent get-or-create: concurrent first-contact from both peers must
+        # not race into a 500, and membership is (re)asserted every call so a
+        # peer that once left can always re-open the DM. add_member is
+        # INSERT OR IGNORE, so re-asserting is a no-op for existing members.
+        _, created = self.db.ensure_channel(name, private=True, created_by="hub",
+                                            add_owner=False)
+        self.db.add_member(name, agent.id, role="member")
+        self.db.add_member(name, peer, role="member")
+        if created:
             self._post_system(name, f"direct channel between {agent.id} and {peer}")
         return self.channel_info(agent, name)
 
@@ -198,11 +214,111 @@ class HubService:
 
     # -- messages -----------------------------------------------------------------
 
+    def _validate_asks(self, raw: Any, status: Status) -> list[dict[str, Any]]:
+        """Normalize + validate structured asks. Applied to whatever ends up in
+        the message data — whether it arrived via the typed `asks` param or was
+        hand-crafted into the raw `data` payload — so there is no bypass path."""
+        if status not in (Status.open, Status.blocked):
+            raise HubError(400, "asks[] are only allowed on open/blocked messages")
+        if not isinstance(raw, list):
+            raise HubError(400, "asks must be a list")
+        if len(raw) > MAX_ASKS:
+            raise HubError(400, f"too many asks (max {MAX_ASKS})")
+        seen: set[str] = set()
+        norm: list[dict[str, Any]] = []
+        for a in raw:
+            if not isinstance(a, dict) or a.get("id") is None:
+                raise HubError(400, "each ask must be an object with an id")
+            aid = str(a["id"]).strip()
+            if not aid or aid in seen:
+                raise HubError(400, "ask ids must be unique and non-empty")
+            seen.add(aid)
+            entry = {"id": aid, "text": sanitize_text(str(a.get("text", "")), MAX_ASK_CHARS)}
+            if a.get("assignee"):
+                entry["assignee"] = sanitize_text(str(a["assignee"]), MAX_ASSIGNEE_CHARS)
+            norm.append(entry)
+        return norm
+
+    def _validate_answers(self, raw: Any, status: Status, reply_to: str | None) -> list[str]:
+        if status != Status.reply or not reply_to:
+            raise HubError(400, "answers[] are only allowed on a reply with reply_to")
+        if not isinstance(raw, list):
+            raise HubError(400, "answers must be a list")
+        answered = [str(x) for x in raw]
+        parent = self.db.get_message(reply_to)
+        parent_ids = {str(a["id"]) for a in asks_of(parent)} if parent else set()
+        if parent_ids:
+            unknown = [a for a in answered if a not in parent_ids]
+            if unknown:
+                raise HubError(400, f"answers reference unknown ask ids: {unknown}")
+        return answered
+
+    def _prepare_structured(self, payload: PostMessage) -> dict[str, Any] | None:
+        """Validate and merge structured asks/answers into the message `data`.
+
+        - `asks` are numbered questions; only meaningful on an open/blocked
+          message (the thing that carries an obligation). Ids must be unique and
+          non-empty; text/assignee are sanitized and bounded like any
+          guaranteed-read field.
+        - `answers` list the ask ids a reply discharges; only on a `reply` that
+          names its `reply_to`. If the parent declares asks, the answered ids must
+          exist there (fail loud, never silently mis-file); if the parent has no
+          asks, answers are accepted as a harmless no-op.
+
+        Validation runs on the EFFECTIVE fields regardless of how they arrived —
+        the typed `asks`/`answers` params OR a hand-crafted `data` payload — so a
+        raw-data write cannot smuggle in duplicate ids or unsanitized text.
+        """
+        data = dict(payload.data) if payload.data else {}
+        if payload.asks is not None:
+            data["asks"] = [a.model_dump(exclude_none=True) for a in payload.asks]
+        if payload.answers is not None:
+            data["answers"] = [str(x) for x in payload.answers]
+        if "asks" in data:
+            data["asks"] = self._validate_asks(data["asks"], payload.status)
+        if "answers" in data:
+            data["answers"] = self._validate_answers(data["answers"], payload.status,
+                                                     payload.reply_to)
+        if payload.signature is not None:
+            # Reserved authorship token: opaque, stored verbatim (bounded), not
+            # yet verified. Consumers may read it; the hub attaches no trust.
+            data["signature"] = str(payload.signature)[:MAX_SIGNATURE_CHARS]
+        return data or None
+
+    def channel_ledger(self, agent: AgentInfo, channel: str, *, verify: bool = True) -> dict[str, Any]:
+        """The channel's verbatim ledger: the complete, ordered, append-only
+        transcript (every turn) plus the hash-chain `head` that commits to it —
+        the durable common record of a room/session that any participant can
+        read and verify, whatever system they run on. Membership-gated like any
+        read. `verify` recomputes the chain to confirm it is intact."""
+        self.require_membership(channel, agent.id)
+        turns, head = self.db.channel_ledger(channel)
+        result: dict[str, Any] = {"channel": channel, "count": len(turns),
+                                  "head": head, "turns": turns}
+        if verify:
+            v = self.db.verify_channel(channel)
+            result["verified"] = v["ok"]
+            result["broken_at"] = v["broken_at"]
+        return result
+
+    def channel_state(self, channel: str) -> str:
+        """A channel is `open` (default) or `closed`. Closed = its session/room
+        ended; new member posts are refused. Owner-controlled via channel:meta."""
+        meta = self.db.store_get(channel, CHANNEL_META_KEY)
+        if meta and isinstance(meta.value, dict) and meta.value.get("state") == "closed":
+            return "closed"
+        return "open"
+
     def post_message(self, agent: AgentInfo, channel: str, payload: PostMessage) -> Message:
         self.require_membership(channel, agent.id)
+        if self.channel_state(channel) == "closed":
+            # A room whose session died accepts no more turns — the bridge and
+            # any subscriber get a clean 409 instead of writing into a dead room.
+            raise HubError(409, f"channel '{channel}' is closed to new posts")
         if len(payload.body.encode()) > MAX_BODY_BYTES:
             raise HubError(413, f"body exceeds {MAX_BODY_BYTES} bytes")
-        if payload.data is not None and len(json.dumps(payload.data).encode()) > MAX_DATA_BYTES:
+        data = self._prepare_structured(payload)
+        if data is not None and len(json.dumps(data).encode()) > MAX_DATA_BYTES:
             raise HubError(413, f"data exceeds {MAX_DATA_BYTES} bytes")
         # `reply_to` must reference a message in THIS channel. Without this a
         # sender could point reply_to at a message in a channel it cannot read
@@ -240,7 +356,7 @@ class HubService:
         message = self.db.insert_message(
             channel, agent.id, kind=Kind.message.value, status=payload.status.value,
             urgency=urgency.value, title=sanitize_title(payload.title), body=payload.body,
-            data=payload.data, reply_to=payload.reply_to,
+            data=data, reply_to=payload.reply_to,
             critical=payload.critical, downgraded=downgraded, to=payload.to,
         )
         self._wake(message)
@@ -271,11 +387,18 @@ class HubService:
     def envelope_for(self, viewer_id: str, message: Message,
                      sla_minutes: float | None = None) -> Envelope:
         parent = self.db.get_message(message.reply_to) if message.reply_to else None
+        # Obligation discharge (only meaningful for open/blocked): a message with
+        # structured asks is discharged only when every ask is answered, so a
+        # partial answer keeps it escalating and its pending asks visible.
+        discharged, pending, total = False, [], 0
+        if message.status in (Status.open, Status.blocked):
+            state = discharge_state(message, self.db.replies_to(message.id))
+            discharged = state.discharged
+            pending, total = state.pending, state.total
         return self.attention.envelope_for(
             viewer_id, message,
             parent_sender=parent.sender if parent else None,
-            # An asker's own follow-up must not silence its obligation.
-            has_reply=self.db.has_reply(message.id, exclude_sender=message.sender),
+            has_reply=discharged, pending_asks=pending, ask_total=total,
             sla_minutes=sla_minutes if sla_minutes is not None
             else self.channel_sla(message.channel),
         )
@@ -334,8 +457,12 @@ class HubService:
                     by_id[message.id] = message
         for message in self.db.unread_criticals(agent.id, channels):
             by_id[message.id] = message
-        for message in self.db.unread_obligations(agent.id, channels):
-            by_id[message.id] = message
+        # Obligations stay pinned until DISCHARGED (every ask answered), not just
+        # until any reply exists — so a partially-answered open message does not
+        # silently drop out of the inbox.
+        for message in self.db.unread_obligation_candidates(agent.id, channels):
+            if not discharge_state(message, self.db.replies_to(message.id)).discharged:
+                by_id[message.id] = message
         # channel_sla is one store read per channel; cache it across the sweep
         # instead of per message (v0.3 perf finding H3).
         sla_cache: dict[str, float] = {}
@@ -361,10 +488,16 @@ class HubService:
 
     def ack_inbox(self, agent: AgentInfo, cursors: dict[str, int]) -> None:
         """Advance triage cursors: 'I have SEEN these envelopes' (not read bodies).
-        Criticals are exempt — they stay pinned until read_message."""
+        Criticals are exempt — they stay pinned until read_message.
+
+        The requested seq is clamped to the channel's current head: a buggy or
+        hand-written client cannot leapfrog its cursor past messages that do not
+        exist yet, which would otherwise permanently hide unread non-sticky
+        traffic that arrives later below the inflated cursor.
+        """
         for channel, seq in cursors.items():
             self.require_membership(channel, agent.id)
-            self.db.set_cursor(agent.id, channel, seq)
+            self.db.set_cursor(agent.id, channel, min(seq, self.db.last_seq(channel)))
 
     # -- store -------------------------------------------------------------------
 
@@ -380,6 +513,10 @@ class HubService:
         self.require_membership(channel, agent.id)
         if len(json.dumps(value).encode()) > MAX_STORE_VALUE_BYTES:
             raise HubError(413, f"store value exceeds {MAX_STORE_VALUE_BYTES} bytes")
+        if key.startswith(FS_PREFIX):
+            # File keys are owned by the VFS API so every mutation is validated
+            # and emits an audit event; a raw store_set would bypass both.
+            raise HubError(403, f"'{key}' is a virtual-filesystem path: use the fs_* API")
         if key.startswith(RESERVED_STORE_PREFIX):
             if self.db.member_role(channel, agent.id) != "owner":
                 raise HubError(403, f"'{key}' is channel-level metadata: owner-writable only")
@@ -399,6 +536,17 @@ class HubService:
         if language is not None and language not in _META_LANGUAGES:
             raise HubError(400, f"channel:meta.language must be one of "
                                 f"{sorted(_META_LANGUAGES)} (got {language!r})")
+        # Reserved: a channel may declare it will require authorship once the
+        # gateway enforces it. Validated as a bool now; not enforced yet.
+        authorship = value.get("authorship_required")
+        if authorship is not None and not isinstance(authorship, bool):
+            raise HubError(400, "channel:meta.authorship_required must be a boolean")
+        # Channel lifecycle: a room/session channel is `open` while live and
+        # `closed` once its session ends. Owner-set (meta is owner-writable);
+        # a closed channel refuses new member posts (the 409 the room bus needs).
+        state = value.get("state")
+        if state is not None and state not in _CHANNEL_STATES:
+            raise HubError(400, f"channel:meta.state must be one of {sorted(_CHANNEL_STATES)}")
 
     def channel_info(self, agent: AgentInfo, channel: str) -> dict[str, Any]:
         """Everything an agent needs before first post: channel, metadata, members."""
@@ -415,6 +563,7 @@ class HubService:
             "members": [m.model_dump() for m in self.db.list_members(channel)],
             "response_sla_minutes": self.channel_sla(channel),
             "language": language,
+            "state": self.channel_state(channel),
             "is_dm": channel.startswith(DM_PREFIX),
         }
 
@@ -440,6 +589,112 @@ class HubService:
         self.require_membership(channel, agent.id)
         return self.db.store_keys(channel)
 
+    # -- per-channel virtual filesystem ------------------------------------------
+    #
+    # A channel's files live as reserved `fs/<path>` keys in its store, so they
+    # inherit membership gating, CAS versioning and durability for free. Every
+    # mutation also appends a `Kind.fs` audit message to the channel log, making
+    # the file history replayable and giving subscribed agents a change signal.
+    # This is the shared, network-accessible "book" that lets agents on
+    # different machines consult and edit a common workspace without a shared disk.
+
+    @staticmethod
+    def _normalize_fs_path(path: str) -> str:
+        """Validate a relative POSIX-ish path and return it normalized. Rejects
+        absolute paths, parent traversal, empty/whitespace segments, backslashes
+        and control characters — so a path can never escape its channel or spoof
+        the store-key namespace."""
+        if not path or len(path) > MAX_FS_PATH_CHARS:
+            raise HubError(400, f"fs path must be 1..{MAX_FS_PATH_CHARS} chars")
+        if "\\" in path or "\x00" in path or any(ord(c) < 32 for c in path):
+            raise HubError(400, "fs path contains illegal characters")
+        if path.startswith("/"):
+            raise HubError(400, "fs path must be relative (no leading '/')")
+        segments = path.split("/")
+        if any(seg in ("", ".", "..") or seg.strip() != seg for seg in segments):
+            raise HubError(400, "fs path has empty, '.', '..' or whitespace-padded segments")
+        return "/".join(segments)
+
+    def _post_fs_audit(self, channel: str, actor: str, op: str, path: str,
+                       version: int, size_bytes: int) -> None:
+        """Append-only record of a file mutation (who/what/when), authored by the
+        actor so `fs_history` and the mirror can replay the file's evolution."""
+        message = self.db.insert_message(
+            channel, actor, kind=Kind.fs.value, status="fyi", urgency="inbox",
+            title=f"fs:{op} {path}", body="",
+            data={"op": op, "path": path, "version": version, "size_bytes": size_bytes},
+            reply_to=None,
+        )
+        self._wake(message)
+
+    def fs_write(self, agent: AgentInfo, channel: str, path: str, content: str,
+                 mime: str = "text/markdown", expect_version: int | None = None) -> FsFile:
+        """Create or edit a file (compare-and-swap via `expect_version`; 0 means
+        'must not exist yet'). Returns the new FsFile with its bumped version."""
+        self.require_membership(channel, agent.id)
+        norm = self._normalize_fs_path(path)
+        if not isinstance(content, str):
+            raise HubError(400, "fs content must be text")
+        size = len(content.encode())
+        if size > MAX_STORE_VALUE_BYTES:
+            raise HubError(413, f"fs file exceeds {MAX_STORE_VALUE_BYTES} bytes")
+        value = {"content": content, "mime": mime}
+        entry = self.db.fs_put(channel, FS_PREFIX + norm, value, agent.id, expect_version)
+        self._post_fs_audit(channel, agent.id, "put", norm, entry.version, size)
+        return FsFile(path=norm, content=content, mime=mime, size_bytes=size,
+                      version=entry.version, updated_by=entry.updated_by,
+                      updated_at=entry.updated_at)
+
+    def fs_read(self, agent: AgentInfo, channel: str, path: str) -> FsFile:
+        self.require_membership(channel, agent.id)
+        norm = self._normalize_fs_path(path)
+        row = self.db.fs_get(channel, FS_PREFIX + norm)
+        if row is None or row["deleted"]:  # a tombstoned file reads as absent
+            raise HubError(404, f"file '{norm}' not found in '{channel}'")
+        value = row["value"] if isinstance(row["value"], dict) else {}
+        content = value.get("content", "")
+        return FsFile(path=norm, content=content, mime=value.get("mime", "text/markdown"),
+                      size_bytes=len(content.encode()), version=row["version"],
+                      updated_by=row["updated_by"], updated_at=row["updated_at"])
+
+    def fs_list(self, agent: AgentInfo, channel: str, prefix: str = "") -> list[dict[str, Any]]:
+        """List live files (metadata only, no content) under an optional prefix.
+        Tombstoned (deleted) files are excluded server-side."""
+        self.require_membership(channel, agent.id)
+        rows = self.db.fs_keys_live(channel, FS_PREFIX + prefix)
+        return [
+            {"path": r["key"][len(FS_PREFIX):], "version": r["version"],
+             "updated_by": r["updated_by"], "updated_at": r["updated_at"]}
+            for r in rows
+        ]
+
+    def fs_delete(self, agent: AgentInfo, channel: str, path: str,
+                  expect_version: int | None = None) -> bool:
+        """Delete a file (CAS via `expect_version`). Tombstones it so the path's
+        version stays monotonic across delete+recreate (CAS remains a valid
+        fence). Returns False if the file was absent or already deleted."""
+        self.require_membership(channel, agent.id)
+        norm = self._normalize_fs_path(path)
+        new_version = self.db.fs_remove(channel, FS_PREFIX + norm, agent.id, expect_version)
+        if new_version is None:
+            return False
+        self._post_fs_audit(channel, agent.id, "delete", norm, new_version, 0)
+        return True
+
+    def fs_history(self, agent: AgentInfo, channel: str, path: str,
+                   since_seq: int = 0, limit: int = 200) -> list[Message]:
+        """The append-only audit trail (put/delete events) for one file, oldest
+        first — replayable history even though the store holds only current head."""
+        self.require_membership(channel, agent.id)
+        norm = self._normalize_fs_path(path)
+        out = []
+        for m in self.db.get_messages(channel, since_seq, limit=10_000):
+            if m.kind == Kind.fs.value and (m.data or {}).get("path") == norm:
+                out.append(m)
+                if len(out) >= limit:
+                    break
+        return out
+
     def get_presence(self, agent: AgentInfo, target_id: str):
         """Presence is visible to yourself, to operators, and to agents you
         share a channel with — not to arbitrary registrants (avoids a global
@@ -454,13 +709,31 @@ class HubService:
 
     def subscribe(self, agent: AgentInfo, channels: list[str],
                   queue: asyncio.Queue, since: dict[str, int] | None = None) -> list[Message]:
-        """Register a live queue; return backlog for requested cursors (catch-up)."""
+        """Register a live queue; return backlog for requested cursors (catch-up).
+
+        The backlog is fully paginated: a client that reconnects after a long
+        outage (a gap larger than one page) gets EVERY message it missed, not
+        just the first page. Silently truncating catch-up would break the
+        at-least-once contract for remote agents whose links flap.
+        """
         backlog: list[Message] = []
         for channel in channels:
             self.require_membership(channel, agent.id)
             self.fanout.subscribe(channel, queue)
             if since and channel in since:
-                backlog.extend(self.db.get_messages(channel, since[channel]))
+                # Fully paginate: a client reconnecting after a long outage
+                # (a gap larger than one page) must receive EVERY message it
+                # missed, not just the first page. Silent truncation would
+                # break at-least-once catch-up for remote agents whose links
+                # flap. (Cold start with no pinned cursor is handled by the
+                # client-side inbox sweep on connect, not here.)
+                cursor = since[channel]
+                while True:
+                    page = self.db.get_messages(channel, cursor)
+                    if not page:
+                        break
+                    backlog.extend(page)
+                    cursor = page[-1].seq
         backlog.sort(key=lambda m: (m.channel, m.seq))
         return backlog
 

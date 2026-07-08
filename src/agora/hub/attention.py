@@ -56,12 +56,18 @@ class AttentionPolicy:
 
     def envelope_for(self, viewer_id: str, message: Message, *,
                      parent_sender: str | None, has_reply: bool,
+                     pending_asks: list[str] | None = None, ask_total: int = 0,
                      sla_minutes: float = DEFAULT_RESPONSE_SLA_MINUTES) -> Envelope:
+        # `has_reply` here means "obligation discharged" — for a structured-asks
+        # message that is true only when every ask is answered, so a partial
+        # answer keeps the message escalating/pinned.
         to_me = viewer_id in message.to
         reply_to_me = parent_sender == viewer_id if parent_sender else False
         body_bytes = len(message.body.encode())
         inline = self._should_inline(message, to_me, reply_to_me, body_bytes)
         effective, escalated = self._effective_urgency(message, viewer_id, has_reply, sla_minutes)
+        pending = pending_asks or []
+        answered = max(ask_total - len(pending), 0)
         return Envelope(
             id=message.id, channel=message.channel, seq=message.seq,
             sender=message.sender, kind=message.kind, status=message.status,
@@ -71,7 +77,14 @@ class AttentionPolicy:
             body_bytes=body_bytes,
             body=message.body if inline else None,
             data=message.data if inline else None,
-            reply_to=message.reply_to, created_at=message.created_at,
+            reply_to=message.reply_to,
+            pending_asks=pending,
+            ask_progress=f"{answered}/{ask_total}" if ask_total else "",
+            # Reserved authorship shape (present on every envelope so consumers
+            # can bind to it now); echo the sender's token, attest nothing yet.
+            signature=(message.data or {}).get("signature"),
+            verified_by=None,
+            created_at=message.created_at,
         )
 
     @staticmethod

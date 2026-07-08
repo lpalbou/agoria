@@ -13,3 +13,6 @@ var/
 *.db-shm
 agora_keys.json
 .cursor/agora.env
+
+# local scratch space (chat logs, notes) — never commit
+untracked/

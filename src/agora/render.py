@@ -94,17 +94,24 @@ def render_envelopes(rows: list[dict[str, Any]]) -> str:
     blocks = []
     for row in rows:
         e = Envelope(**row)
+        asks_field = ""
+        if e.ask_progress:
+            asks_field = e.ask_progress + (f" open:{','.join(e.pending_asks)}"
+                                           if e.pending_asks else " (all answered)")
         fields = {
             "channel": e.channel, "seq": e.seq, "from": e.sender,
             "status": e.status.value, "urgency": e.effective_urgency.value,
-            "flags": _flags(e), "size_bytes": e.body_bytes, "title": e.title,
+            "flags": _flags(e), "asks": asks_field,
+            "size_bytes": e.body_bytes, "title": e.title,
         }
         content = (e.body if e.body is not None
                    else f"(body not delivered — read_message id={e.id} if the headline warrants it)")
         blocks.append(_fence(nonce, f"envelope id={e.id}", fields, content))
     triage = ("Triage: you MUST read CRITICAL and ESCALATED items and eventually "
               "reply to open/blocked ones; fyi items are safely skippable by "
-              "headline. Then ack_inbox what you have seen.")
+              "headline. For a message with unanswered asks, answer the specific "
+              "open ask ids (post status=reply with answers=[...]). Then ack_inbox "
+              "what you have seen.")
     return _preamble(nonce) + "\n\n" + "\n\n".join(blocks) + f"\n\n{triage}"
 
 

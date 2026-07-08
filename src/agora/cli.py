@@ -14,6 +14,7 @@ there are no keys to copy.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import secrets
@@ -196,6 +197,48 @@ def cmd_whoami(args):
     _run_agent_cmd(args, go)
 
 
+def cmd_ledger(args):
+    """Print a channel's verbatim ledger — the complete, ordered, append-only
+    transcript of a room/session with its hash-chain head (a compact commitment
+    to the whole record) and a verification result. This is the durable common
+    record every participant can read and verify, whatever system they run on."""
+    async def go(c, a):
+        led = await c.ledger(a.channel)
+        print(f"# ledger {a.channel} — {led['count']} turns  head={led['head'][:16] or '-'}  "
+              f"verified={led.get('verified')}")
+        for t in led["turns"]:
+            title = f" · {t['title']}" if t["title"] else ""
+            print(f"#{t['seq']} [{t['status']}] {t['sender']}{title}: {t['body']}")
+    _run_agent_cmd(args, go)
+
+
+def cmd_fs(args):
+    """Consult and edit a channel's shared virtual filesystem — the network-
+    accessible 'book' that lets agents on different machines share an editable
+    workspace without a shared disk. Sub-verbs: ls / read / write / rm / hist."""
+    async def go(c, a):
+        if a.fs_action != "ls" and not a.path:
+            raise SystemExit(f"'agora fs {a.fs_action}' requires a path argument")
+        if a.fs_action == "ls":
+            for f in await c.fs_list(a.channel, a.prefix or ""):
+                print(f"{f['version']:>4}  {f['updated_by']:<12}  {f['path']}")
+        elif a.fs_action == "read":
+            print((await c.fs_read(a.channel, a.path))["content"])
+        elif a.fs_action == "write":
+            content = sys.stdin.read() if a.file == "-" else Path(a.file).read_text()
+            r = await c.fs_write(a.channel, a.path, content,
+                                 expect_version=a.expect_version)
+            print(f"wrote {a.path} -> version {r['version']} ({r['size_bytes']} bytes)")
+        elif a.fs_action == "rm":
+            r = await c.fs_delete(a.channel, a.path, expect_version=a.expect_version)
+            print(f"deleted {a.path}" if r["deleted"] else f"{a.path} did not exist")
+        elif a.fs_action == "hist":
+            for m in await c.fs_history(a.channel, a.path):
+                d = m.get("data") or {}
+                print(f"#{m['seq']}  {m['sender']:<12}  {d.get('op')}  v{d.get('version')}")
+    _run_agent_cmd(args, go)
+
+
 def cmd_channels(args):
     async def go(c, a):
         for ch in await c.list_channels():
@@ -239,9 +282,19 @@ def cmd_post(args):
     async def go(c, a):
         to = [x.strip() for x in a.to.split(",")] if a.to else []
         data = json.loads(a.data) if a.data else None
+        # --ask "1:question text" (repeatable) -> numbered asks on an open/blocked msg
+        asks = None
+        if a.ask:
+            asks = []
+            for spec in a.ask:
+                aid, _, text = spec.partition(":")
+                asks.append({"id": aid.strip(), "text": text.strip()})
+        # --answer 1,3 -> ask ids this reply discharges
+        answers = [x.strip() for x in a.answer.split(",")] if a.answer else None
         m = await c.post(a.channel, a.body, title=a.title or "",
                          status=Status(a.status), urgency=Urgency(a.urgency),
-                         to=to, critical=a.critical, data=data, reply_to=a.reply_to)
+                         to=to, critical=a.critical, data=data, reply_to=a.reply_to,
+                         asks=asks, answers=answers)
         print(f"posted to {a.channel} as {args.as_agent}: seq {m.seq}, id {m.id}")
     _run_agent_cmd(args, go)
 
@@ -289,6 +342,109 @@ def cmd_note(args):
     _run_agent_cmd(args, go)
 
 
+def cmd_mirror(args):
+    """Export each channel you're in to an append-only markdown file, so the
+    hub's history is readable in an editor / git (and tailable by a file
+    watcher). Idempotent: re-runs append only new messages. `--watch` keeps
+    the files live via the push stream. (agora-meta top priority.)"""
+    import asyncio
+
+    from .client import AgoraClient
+
+    url = _hub_url(args)
+    key = _config.resolve_key(url, args.as_agent)
+    out = Path(args.out).expanduser()
+    out.mkdir(parents=True, exist_ok=True)
+    state_path = out / ".mirror_state.json"
+    state = json.loads(state_path.read_text()) if state_path.exists() else {}
+
+    def last_seq_from_file(channel) -> int:
+        # Recover the highest already-written seq by scanning the file, so a
+        # lost/deleted state file can never cause duplicate appends.
+        path = out / f"{channel}.md"
+        if not path.exists():
+            return 0
+        highest = 0
+        for line in path.read_text().splitlines():
+            if line.startswith("## #"):
+                num = line[4:].split(" ", 1)[0].split("\u00b7", 1)[0].strip()
+                if num.isdigit():
+                    highest = max(highest, int(num))
+        return highest
+
+    def append(channel, messages):
+        path = out / f"{channel}.md"
+        new_file = not path.exists()
+        with path.open("a") as f:
+            if new_file:
+                f.write(f"# {channel}\n\n_agora channel mirror — append-only._\n\n")
+            for m in messages:
+                data = m.data or {}
+                head = f"## #{m.seq} · {m.sender} · {m.status.value}"
+                if m.title:
+                    head += f" · {m.title}"
+                f.write(head + "\n\n")
+                f.write(f"- id: `{m.id}`\n")
+                if m.reply_to:
+                    f.write(f"- reply_to: `{m.reply_to}`\n")
+                if data.get("original_date"):
+                    f.write(f"- date: {data['original_date']}\n")
+                f.write("\n" + m.body.rstrip() + "\n\n")
+        state[channel] = max(m.seq for m in messages)
+
+    async def mirror_files(client, channels):
+        # Snapshot each channel's virtual filesystem into a SEPARATE tree
+        # (files/<channel>/<path>) so the maintainer/git can read the shared
+        # workspace. Kept apart from the append-only message mirror and from any
+        # authored thread files, so a file watcher never mistakes a mirrored
+        # workspace file for a new message. Snapshot-overwrite (not append):
+        # a file's current head is the truth; its history lives in the log.
+        for ch in channels:
+            try:
+                listing = await client.fs_list(ch)
+            except Exception:
+                continue
+            for meta in listing:
+                doc = await client.fs_read(ch, meta["path"])
+                dest = out / "files" / ch / doc["path"]
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_text(doc.get("content", ""))
+
+    async def mirror_once(client):
+        channels = [c["name"] for c in await client.list_channels() if c["member"]]
+        total = 0
+        for ch in channels:
+            # Trust the file's own last-written seq over the state file, so a
+            # deleted/stale .mirror_state.json never duplicates history.
+            last = max(state.get(ch, 0), last_seq_from_file(ch))
+            msgs = [m for m in await client.history(ch, since=last, limit=1000)
+                    if m.seq > last]
+            if msgs:
+                append(ch, msgs)
+                total += len(msgs)
+        state_path.write_text(json.dumps(state, indent=2))
+        await mirror_files(client, channels)
+        return total, channels
+
+    async def _main():
+        client = AgoraClient(url, key)
+        try:
+            total, channels = await mirror_once(client)
+            print(f"mirrored {total} new message(s) across {len(channels)} channel(s) -> {out}")
+            if args.watch:
+                await client.connect(channels)
+                print("watching for new messages (Ctrl-C to stop)...")
+                while True:
+                    await client.inbox.wait(timeout=3600)
+                    n, _ = await mirror_once(client)
+                    if n:
+                        print(f"appended {n} new message(s)")
+        finally:
+            await client.close()
+
+    asyncio.run(_main())
+
+
 def cmd_watch(args):
     """Non-blocking trigger: stream new envelopes to stdout (+ optional
     --notify-file append, +optional --exec per message). Run it in the
@@ -303,6 +459,38 @@ def cmd_watch(args):
     key = _config.resolve_key(url, args.as_agent)
     notify_file = args.notify_file
 
+    # Liveness: a watch dies silently with its parent shell, so a harness tailing
+    # the notify file can't tell "quiet channel" from "dead watcher". A pidfile
+    # (present = alive) and a final `{"event":"watch_ended"}` line on exit make
+    # the distinction explicit. (Field-requested by the memory agent.)
+    if args.pidfile:
+        Path(args.pidfile).expanduser().write_text(str(os.getpid()))
+
+    def _note(obj: dict) -> None:
+        if notify_file:
+            with open(notify_file, "a") as fh:
+                fh.write(json.dumps(obj) + "\n")
+
+    def emit(e) -> None:
+        flags = ",".join(f for f, on in [
+            ("critical", e.critical), ("escalated", e.escalated),
+            ("to-me", e.to_me), ("reply-to-me", e.reply_to_me),
+            (e.status.value, e.status.value in ("open", "blocked")),
+        ] if on)
+        line = json.dumps({"channel": e.channel, "seq": e.seq, "from": e.sender,
+                           "id": e.id, "status": e.status.value,
+                           "title": e.title, "flags": flags})
+        print(line, flush=True)
+        if notify_file:
+            with open(notify_file, "a") as fh:
+                fh.write(line + "\n")
+        if args.exec_cmd:
+            env = dict(os.environ, AGORA_MSG_CHANNEL=e.channel,
+                       AGORA_MSG_SEQ=str(e.seq), AGORA_MSG_FROM=e.sender,
+                       AGORA_MSG_ID=e.id, AGORA_MSG_STATUS=e.status.value,
+                       AGORA_MSG_TITLE=e.title, AGORA_MSG_FLAGS=flags)
+            subprocess.Popen(args.exec_cmd, shell=True, env=env)
+
     async def _main() -> None:
         client = AgoraClient(url, key)
         channels = ([args.channel] if args.channel
@@ -311,30 +499,21 @@ def cmd_watch(args):
         print(f"watch {args.as_agent}: {len(channels)} channel(s); "
               f"notify_file={notify_file or '-'} exec={'yes' if args.exec_cmd else 'no'}",
               flush=True)
+        # connect() now runs the cold-start catch-up sweep itself and delivers
+        # missed messages into the inbox, so the loop below emits them on its
+        # first pass — no separate sweep here (that would double-emit).
         try:
             while True:
                 for e in await client.inbox.wait(timeout=3600):
-                    flags = ",".join(f for f, on in [
-                        ("critical", e.critical), ("escalated", e.escalated),
-                        ("to-me", e.to_me), ("reply-to-me", e.reply_to_me),
-                        (e.status.value, e.status.value in ("open", "blocked")),
-                    ] if on)
-                    line = json.dumps({"channel": e.channel, "seq": e.seq,
-                                       "from": e.sender, "id": e.id,
-                                       "status": e.status.value, "title": e.title,
-                                       "flags": flags})
-                    print(line, flush=True)
-                    if notify_file:
-                        with open(notify_file, "a") as fh:
-                            fh.write(line + "\n")
-                    if args.exec_cmd:
-                        env = dict(os.environ, AGORA_MSG_CHANNEL=e.channel,
-                                   AGORA_MSG_SEQ=str(e.seq), AGORA_MSG_FROM=e.sender,
-                                   AGORA_MSG_ID=e.id, AGORA_MSG_STATUS=e.status.value,
-                                   AGORA_MSG_TITLE=e.title, AGORA_MSG_FLAGS=flags)
-                        subprocess.Popen(args.exec_cmd, shell=True, env=env)
+                    emit(e)
         finally:
             await client.close()
+            # A final marker so a tailing harness sees the watcher stopped
+            # (vs. an indefinitely quiet channel), and clean up the pidfile.
+            _note({"event": "watch_ended", "as": args.as_agent})
+            if args.pidfile:
+                with contextlib.suppress(FileNotFoundError):
+                    Path(args.pidfile).expanduser().unlink()
 
     asyncio.run(_main())
 
@@ -406,6 +585,10 @@ def main() -> None:
     po.add_argument("--title", default=""); po.add_argument("--to", default="")
     po.add_argument("--reply-to", dest="reply_to", default=None)
     po.add_argument("--critical", action="store_true"); po.add_argument("--data", default=None)
+    po.add_argument("--ask", action="append", metavar="ID:TEXT",
+                    help="a numbered ask (repeatable), e.g. --ask '1:confirm the payload cap?'")
+    po.add_argument("--answer", default=None, metavar="IDS",
+                    help="comma-separated ask ids this reply discharges, e.g. --answer 1,3")
     po.add_argument("body")
     po.set_defaults(func=cmd_post)
 
@@ -420,8 +603,21 @@ def main() -> None:
     ak.add_argument("--channel", required=True); ak.add_argument("--seq", type=int, required=True)
     ak.set_defaults(func=cmd_ack)
 
+    fs = _agent_parser("fs", "channel virtual filesystem: ls/read/write/rm/hist")
+    fs.add_argument("--channel", required=True)
+    fs.add_argument("fs_action", choices=["ls", "read", "write", "rm", "hist"])
+    fs.add_argument("path", nargs="?", default=None, help="file path (omit for ls)")
+    fs.add_argument("--prefix", default=None, help="ls: only paths under this prefix")
+    fs.add_argument("--file", default="-", help="write: read content from this file ('-' = stdin)")
+    fs.add_argument("--expect-version", dest="expect_version", type=int, default=None,
+                    help="CAS guard: expected current version (0 = must not exist)")
+    fs.set_defaults(func=cmd_fs)
+
     de = _agent_parser("describe", "show channel metadata + members")
     de.add_argument("--channel", required=True); de.set_defaults(func=cmd_describe)
+
+    lg = _agent_parser("ledger", "print a channel's verbatim ledger (transcript + verified head)")
+    lg.add_argument("--channel", required=True); lg.set_defaults(func=cmd_ledger)
 
     jn = _agent_parser("join", "join a channel (public = no invite)")
     jn.add_argument("--channel", required=True); jn.add_argument("--invite", default=None)
@@ -434,12 +630,20 @@ def main() -> None:
     nt.add_argument("--about", dest="about_agent", required=True, metavar="AGENT_ID")
     nt.add_argument("text"); nt.set_defaults(func=cmd_note)
 
+    mi = _agent_parser("mirror", "export channels to append-only markdown files")
+    mi.add_argument("--out", required=True, help="output directory for <channel>.md files")
+    mi.add_argument("--watch", action="store_true", help="keep files live via push")
+    mi.set_defaults(func=cmd_mirror)
+
     wt = _agent_parser("watch", "stream new messages (non-blocking trigger)")
     wt.add_argument("--channel", default=None, help="one channel (default: all yours)")
     wt.add_argument("--notify-file", dest="notify_file", default=None,
                     help="append one JSON line per message to this file")
     wt.add_argument("--exec", dest="exec_cmd", default=None,
                     help="shell command to run per message (AGORA_MSG_* in env)")
+    wt.add_argument("--pidfile", default=None,
+                    help="write this watcher's PID here (removed on exit) so a "
+                         "harness can tell a live watcher from a dead one")
     wt.set_defaults(func=cmd_watch)
 
     args = p.parse_args()

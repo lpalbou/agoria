@@ -37,6 +37,16 @@ ADDRESSED_INLINE_BYTES = 4096  # replies/messages addressed to you inline up to 
 MAX_ABOUT_CHARS = 500          # self-descriptions are read by every joiner: same hygiene as titles
 DM_PREFIX = "dm:"              # reserved channel-name prefix for direct 1:1 channels
 
+# Per-channel virtual filesystem (the shared, network-accessible "book" that
+# lets remote agents on different machines share an editable workspace without
+# a shared disk). Files live as reserved-prefix keys in the channel store, so
+# they inherit membership, CAS versioning, and durability; every mutation also
+# emits an append-only `Kind.fs` audit message so the file history is replayable.
+FS_PREFIX = "fs/"              # reserved store-key prefix for file paths
+MAX_FS_PATH_CHARS = 512        # path length cap
+# File content reuses MAX_STORE_VALUE_BYTES (256 KiB): text/markdown workspace
+# artifacts (plans, contracts, AGENTS-style registries), not a blob store.
+
 _TEXT_CLEAN = re.compile(r"[\x00-\x1f\x7f]+")
 
 
@@ -76,6 +86,20 @@ class Urgency(str, Enum):
 class Kind(str, Enum):
     message = "message"  # a participant message
     system = "system"    # hub-generated (joins, leaves, channel events)
+    fs = "fs"            # a file-operation audit event (put/delete on the channel VFS)
+
+
+class FsFile(BaseModel):
+    """One file in a channel's virtual filesystem. `content` is the editable
+    text body; `version` powers compare-and-swap edits (0 = "must not exist")."""
+
+    path: str
+    content: str
+    mime: str = "text/markdown"
+    size_bytes: int = 0
+    version: int = 0
+    updated_by: str = ""
+    updated_at: float = 0.0
 
 
 class Message(BaseModel):
@@ -96,6 +120,23 @@ class Message(BaseModel):
     created_at: float = Field(default_factory=time.time)
 
 
+MAX_ASK_CHARS = 500            # a numbered ask is an obligation: keep it plain + bounded
+MAX_ASKS = 20                  # a single message should not carry an unbounded checklist
+MAX_ASSIGNEE_CHARS = 64        # an ask's optional assignee is an agent id: short + clean
+MAX_SIGNATURE_CHARS = 1024     # reserved authorship token: opaque, bounded
+
+
+class Ask(BaseModel):
+    """One numbered, answerable question inside an open/blocked message. Its
+    `id` is sender-assigned and unique within the message; a reply discharges
+    it by listing that id in its `answers`, so partial-answer state becomes
+    mechanical (the file protocol tracked this only by convention)."""
+
+    id: str
+    text: str
+    assignee: str | None = None  # optional: who is expected to answer (reserved; advisory)
+
+
 class PostMessage(BaseModel):
     """Client -> hub payload to post a message."""
 
@@ -107,6 +148,9 @@ class PostMessage(BaseModel):
     to: list[str] = Field(default_factory=list)
     data: dict[str, Any] | None = None
     reply_to: str | None = None
+    asks: list[Ask] | None = None       # numbered questions (open/blocked only)
+    answers: list[str] | None = None    # ask ids this reply discharges (reply only)
+    signature: str | None = None        # RESERVED: opaque authorship token (enforcement later)
 
 
 class Envelope(BaseModel):
@@ -147,6 +191,14 @@ class Envelope(BaseModel):
     body: str | None = None              # inlined only per delivery policy
     data: dict[str, Any] | None = None   # included only when body is inlined
     reply_to: str | None = None
+    pending_asks: list[str] = Field(default_factory=list)  # ask ids still unanswered
+    ask_progress: str = ""               # "answered/total", e.g. "1/3"; "" when no asks
+    # Authorship (RESERVED for a future gateway-issued identity proof — see
+    # thread 0006 P4). Present on every envelope NOW so consumers can hard-code
+    # the shape before entities join; `verified_by` is always None until the
+    # gateway enforces authorship. Not a trust signal yet.
+    signature: str | None = None         # sender-supplied opaque token (echoed)
+    verified_by: str | None = None       # hub/gateway attestation (reserved; None today)
     created_at: float = 0.0
 
 

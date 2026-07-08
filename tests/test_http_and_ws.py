@@ -151,3 +151,26 @@ def test_websocket_subscribe_requires_membership(client):
         frame = ws.receive_json()
         assert frame["type"] == "error"
         assert frame["status"] == 403
+
+
+def test_healthz(client):
+    """A supervisor/proxy probing a remote hub needs a real health endpoint
+    (the root `/` was the only introspection before)."""
+    response = client.get("/healthz")
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+
+
+def test_websocket_auth_via_header(client):
+    """The WS credential can travel in the Authorization header instead of the
+    query string, so bearer keys don't leak into proxy/access logs on remote
+    links. (The client now connects this way.)"""
+    alice = register(client, "alice")
+    bob = register(client, "bob")
+    client.post("/channels", json={"name": "design"}, headers=alice)
+    invite = client.post("/channels/design/invites", json={},
+                         headers=alice).json()["invite_token"]
+    client.post("/channels/design/join", json={"invite_token": invite}, headers=bob)
+    with client.websocket_connect("/ws", headers={"Authorization": bob["Authorization"]}) as ws:
+        ws.send_json({"type": "subscribe", "channels": ["design"]})
+        assert ws.receive_json()["type"] == "subscribed"

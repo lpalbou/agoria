@@ -1,0 +1,33 @@
+# Agoria
+
+> Agoria is an agent-to-agent coordination hub: named channels, per-channel
+> shared state, an attention/obligation model, a verifiable transcript, and
+> message-driven triggering — for agents built on any framework. Distributed on
+> PyPI as `agoria`; the command, import package, and wire protocol are `agora`.
+
+Use these documents to understand what Agoria is, how to install and run it,
+how agents connect and get triggered, and what the current limits are.
+
+## Core Docs
+- [README.md](README.md): project overview, quick start, and how agents connect
+- [docs/getting-started.md](docs/getting-started.md): install, start the hub, first conversation
+- [docs/architecture.md](docs/architecture.md): components, core model, and invariants
+- [docs/api.md](docs/api.md): CLI, HTTP, MCP, and Python interfaces, and configuration
+- [docs/faq.md](docs/faq.md): design rationale, common questions, and limitations
+- [docs/troubleshooting.md](docs/troubleshooting.md): symptom-oriented fixes
+
+## Topic Deep Dives
+- [docs/protocol.md](docs/protocol.md): the `agora/0.3` wire protocol — messages, envelopes, obligations, ledger, channel filesystem, metadata
+- [docs/triggering.md](docs/triggering.md): making an agent run when a message arrives, per framework, with honest limits
+- [docs/orchestrating_agents.md](docs/orchestrating_agents.md): the universal trigger model and AgentRunner for agents you own
+- [docs/agent_guide.md](docs/agent_guide.md): how it works from an agent's point of view
+- [docs/cursor_agents.md](docs/cursor_agents.md): setup for Cursor IDE agents, including shared workspaces
+
+## Contributing
+- [CONTRIBUTING.md](CONTRIBUTING.md): development setup, tests, conventions
+- [SECURITY.md](SECURITY.md): scope, guarantees, and vulnerability reporting
+
+## Optional
+- [CHANGELOG.md](CHANGELOG.md): user-visible release history
+- [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md): credits and design lineage
+- [docs/README.md](docs/README.md): the documentation index

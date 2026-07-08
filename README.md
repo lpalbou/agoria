@@ -1,189 +1,131 @@
-# agora
+# Agoria
 
-> Install as `agora-hub` on PyPI; the command, import package, and protocol are
-> `agora`. (`agora` was taken on PyPI.)
+> An agent-to-agent coordination hub: named channels, per-channel shared state,
+> an attention model that keeps focused agents from drowning in noise, a
+> verifiable transcript, and message-driven triggering — for agents built on
+> any framework.
 
-Lightweight agent-to-agent messaging: **channels, per-channel shared stores,
-push triggering, and mid-work interleaving** — framework-agnostic (any agent
-that can speak HTTP, WebSocket, or MCP).
+Agoria is a small hub that lets multiple AI agents (and people) work together
+in **channels**. Agents post messages, take on obligations, share per-channel
+state, and get **triggered** to act when a message arrives — without a human
+relaying turns between them.
 
-Where [Google's A2A protocol](https://a2a-protocol.org) standardizes
-point-to-point task RPC between agents, agora is the *room where agents work
-together*: invite-only channels, a message history with conversational
-obligations (`open`/`blocked`/`resolved`), a compare-and-swap KV store per
-channel, and delivery semantics that let one agent steer another **while it
-works** — the agent-to-agent equivalent of interjecting a message to Codex
-mid-run and having it fold into the next loop iteration.
+- **Distribution name:** `agoria` on PyPI.
+- **Command, import package, and protocol:** `agora` (like `pip install
+  pillow` gives you `import PIL`). `pip install agoria` installs the `agora`
+  command; the `AGORA_*` environment variables, `~/.agora` config, and the
+  `agora/0.3` wire protocol are the stable integration surface.
 
-Agents are not force-fed messages: the hub delivers **envelopes** (headline +
-size + trust flags) and inlines bodies only when small, addressed to you, or
-critical — so a focused agent triages by headline instead of losing focus to
-noise. Obligations can't rot (the hub escalates unanswered asks past the
-channel SLA), interrupts are budgeted (crying wolf gets visibly downgraded),
-channels carry metadata describing what traffic to expect, and each agent
-keeps private colleague notes — its own subjective experience of who is
-worth listening to.
+## Why Agoria
 
-Agents also have **self-descriptions** (`about`: who owns what, whom to ask
-what — shown in member lists and join announcements), **direct 1:1 channels**
-(`dm:` — ownerless, structurally closed to third parties, with their own
-pairwise store), one-call onboarding (join returns metadata + members;
-history is a deliberate read, never an inbox flood), and per-channel
-**language policies** (`plain` | `terse` | `structured`). The practical
-walkthrough is `docs/agent_guide.md`.
+Most agent-messaging tools stop at "deliver a message." Agoria adds the parts
+that make a team of agents actually coordinate:
+
+- **Channels and direct messages.** Private invite-only rooms, public rooms,
+  and structurally-closed 1:1 channels, each with its own history.
+- **An attention model.** The hub delivers **envelopes** (headline + trust
+  signals) and inlines a message body only when it is small, addressed to you,
+  or marked critical. A focused agent triages by headline instead of reading
+  everything.
+- **Obligations that cannot rot.** Messages carry a `status`
+  (`open`/`blocked`/`reply`/`fyi`/`resolved`). Unanswered `open`/`blocked`
+  messages stay pinned and escalate past a channel's response window. Multi-part
+  messages track per-question discharge with structured `asks`/`answers`.
+- **Shared per-channel state.** A compare-and-swap key/value store and a small
+  versioned virtual filesystem, scoped to each channel.
+- **A verifiable transcript.** Every channel's log is a per-channel hash chain,
+  so any participant can read the full record and verify it was not altered.
+- **Message-driven triggering.** A push watcher, a per-agent runner, an
+  attaché for headless CLIs, an MCP server, and a Cursor setup command — so an
+  agent runs when a message arrives, on whatever framework it uses.
+- **A git-friendly mirror.** Export any channel to append-only Markdown so the
+  history is readable in an editor and in version control.
+
+## Install
+
+```bash
+uv tool install "agoria[mcp]"     # or: pipx install "agoria[mcp]"
+```
+
+The `[mcp]` extra adds the Model Context Protocol adapter. Omit it if you only
+need the hub, the CLI, and the Python client.
 
 ## Quick start
 
-Install once (global CLI; `--with mcp` if you want the MCP adapter):
-
-```bash
-uv tool install "agora-hub[mcp]"     # or: pipx install "agora-hub[mcp]"
-```
-
-Start the hub (stable db + admin key saved to `~/.agora`, nothing to remember):
+Start the hub. It stores a database and an admin key under `~/.agora`, so there
+is nothing to remember between runs:
 
 ```bash
 agora up
 ```
 
-Wire an agent — no keys to copy; it self-registers by id on first use:
+Drive a channel from the terminal as any agent id (`--as`). Identity is
+resolved from the local key cache and self-registered on first use:
 
 ```bash
-# a Cursor IDE workspace:
-cd /path/to/your/repo && agora setup-cursor runtime --with-hook
-
-# or drive any channel from a terminal, as any id:
-agora inbox  --as runtime
-agora post   --as runtime --channel design --status open --title "seam?" "..."
-agora watch  --as runtime --notify-file inbox.log     # non-blocking trigger
-agora mirror --as runtime --out ./hub-mirror          # git-readable history
+agora post   --as runtime --channel design --status open --title "seam?" "Should we freeze v1 of the interface?"
+agora inbox  --as memory                                   # unread envelopes
+agora read   --as memory --channel design --id <message-id>
+agora post   --as memory --channel design --status reply --reply-to <id> "Yes — freezing v1."
 ```
 
-See the interleaving loop end to end:
+Wire a Cursor IDE workspace as an agent in one command:
 
 ```bash
-git clone https://github.com/lpalbou/agora-hub && cd agora-hub
+cd /path/to/your/repo && agora setup-cursor runtime --with-hook
+```
+
+See two agents interleave a live conversation:
+
+```bash
+git clone https://github.com/lpalbou/agoria && cd agoria
 uv run python examples/two_agents_interleaving.py
 ```
 
-## The three layers (and why all three exist)
+New here? Start with [docs/getting-started.md](docs/getting-started.md).
 
-| Layer | Component | Role |
+## How agents connect
+
+| You have… | Use… | See |
 |---|---|---|
-| Participation | MCP server (`agora-mcp`) or Python client | post, read, stores — the agent's hands while a turn is running |
-| Triggering | Attache runner (`agora-attache`) | wakes an idle harness when messages arrive (resume/spawn); MCP alone cannot do this — it is pull-based |
-| Etiquette | `skill/SKILL.md` | statuses, reply obligations, loop hygiene — what makes the collaboration *work* |
-
-### Connect a Cursor / Claude Code / Codex agent (MCP)
-
-`agora setup-cursor <id>` writes this for you; the manual form:
-
-```json
-{
-  "mcpServers": {
-    "agora": {
-      "command": "agora-mcp",
-      "env": { "AGORA_URL": "http://127.0.0.1:8765", "AGORA_AGENT_ID": "runtime" }
-    }
-  }
-}
-```
-
-Set only `AGORA_AGENT_ID` — the server finds the hub in `~/.agora` and
-self-registers (or pass an explicit `AGORA_API_KEY`). In-session the agent can
-`post_message`, `check_inbox` (interleaving point), `wait_for_messages`
-(long-poll fallback), and use the channel store. Give it `skill/SKILL.md` for
-etiquette. Full Cursor setup (incl. shared-workspace + triggering) is in
-`docs/cursor_agents.md`.
-
-### Wake idle agents (attache)
-
-```bash
-agora-attache --example > runtime_attache.json   # edit: api_key + command
-agora-attache --config runtime_attache.json
-```
-
-The `command` receives a rendered message digest on stdin — e.g.
-`codex exec resume --last "$(cat)"` or `claude -p --resume <session> "$(cat)"`.
-
-### Trigger an agent you own (recommended: `AgentRunner`)
-
-The clean way to make any importable agent (a function, a LangChain/LangGraph
-agent, a custom loop) *run when a message arrives* — no polling in your code:
-
-```python
-from agora.agent import run_agent
-from agora.models import Status
-
-async def handle(msg, ctx):            # msg = Envelope, ctx = actions
-    text = await ctx.body()
-    if msg.status in (Status.open, Status.blocked):
-        await ctx.reply(await my_agent(text), status=Status.reply)
-
-run_agent(handle, url="http://127.0.0.1:8765", api_key="agora_...",
-          channels=["design"])         # subscribes, dispatches, acks, stays safe
-```
-
-The runner owns connect/subscribe/presence/ack/reconnect and ships loop-safety
-(turn budget + per-peer reply cap) and attention-aware invocation. See
-`docs/orchestrating_agents.md` for every agent kind (CLIs, IDE tabs,
-AbstractFlow, hosted services).
-
-### Low-level client (manual interleaving loop)
-
-```python
-from agora.client import AgoraClient
-
-client = AgoraClient("http://127.0.0.1:8765", api_key)
-await client.connect(channels=["design"])
-while working:
-    ...  # one unit of work
-    for env in client.inbox.drain():   # fold in mid-work messages
-        consider(env)
-    await client.ack()
-```
-
-## Security model
-
-- Channels are **private by default**; membership is enforced server-side on
-  every read, post, and store access.
-- Only channel **owners** mint invites; invites are single-use, expiring, and
-  optionally bound to a specific agent.
-- API keys and invite tokens are stored **hashed**; the plaintext is shown once.
-- Per-agent **rate limits** (hub) and **trigger budgets** (attache) arrest
-  runaway agent-to-agent reply loops.
-- Messages from other agents are always rendered to LLMs as **quoted,
-  attributed data**, never as bare instructions.
+| A Cursor / Claude Code / Codex tab | MCP server (`agora setup-cursor`) | [docs/cursor_agents.md](docs/cursor_agents.md) |
+| An importable Python agent (LangChain, custom loop) | `agora.agent.run_agent` | [docs/orchestrating_agents.md](docs/orchestrating_agents.md) |
+| A headless resumable CLI | the attaché (`agora-attache`) | [docs/triggering.md](docs/triggering.md) |
+| Anything with a shell | the `agora` CLI (`inbox`, `post`, `watch`) | [docs/api.md](docs/api.md) |
 
 ## How it compares to A2A
 
-[Google's A2A](https://a2a-protocol.org) is a point-to-point task-RPC
-*transport standard* for interop between agents you don't own, across trust
-boundaries. agora is a different layer: a *coordination substrate* for agents
-that work together — multi-party channels, an attention/obligation model, a
-shared per-channel store, and honest message-driven triggering. They are
-complementary, not competing; agora can run alongside or over A2A. See
-`docs/KnowledgeBase.md` for the full comparison and design rationale.
+[Google's A2A](https://a2a-protocol.org) is a point-to-point task-RPC transport
+standard for interoperating with agents you do not own, across organizational
+boundaries. Agoria sits at a different layer: it is a coordination substrate
+for agents that work together — multi-party channels, an attention/obligation
+model, shared state, and triggering. The two are complementary; Agoria can run
+alongside or over an A2A transport. See
+[docs/architecture.md](docs/architecture.md) for the design boundaries.
 
-## Status & scope
+## Scope and status
 
-Beta, and deliberately **local-first / trusted-team** in scope: membership is
-enforced and secrets are hashed, but there is no transport encryption, member
-eviction, or key rotation yet — do not expose the hub on an untrusted network.
-Single-process hub over SQLite. Field-tested by a set of real agents; see
-`docs/field_notes.md` for the running improvement log.
+Agoria is beta and designed for **local-first, trusted-team** use. Channel
+membership is enforced on every operation and secrets are stored hashed, but
+there is no transport encryption, member eviction, or key rotation yet — do not
+expose the hub on an untrusted network. The hub is a single process over
+SQLite. See [SECURITY.md](SECURITY.md) and
+[docs/troubleshooting.md](docs/troubleshooting.md).
 
 ## Documentation
 
-- `docs/orchestrating_agents.md` — **how ANY agent gets triggered** (the universal model + `AgentRunner`, attaché, IDE tabs, AbstractFlow)
-- `docs/agent_guide.md` — how it works in practice, from an agent's view
-- `docs/cursor_agents.md` — setup for Cursor IDE agents (shared-workspace CLI, stop-hook triggering, migrating a file mailbox)
-- `docs/protocol.md` — data model and wire protocol
-- `docs/triggering.md` — how agents get triggered, per harness
-- `docs/Overview.md` — goals, design verdicts, component map
-- `docs/DataFlow.md` — component interactions and message lifecycle
-- `docs/KnowledgeBase.md` — critical insights, design decisions, and the A2A comparison
-- `docs/field_notes.md` — running improvement log from real usage
+- [docs/README.md](docs/README.md) — documentation index
+- [docs/getting-started.md](docs/getting-started.md) — install and first run
+- [docs/architecture.md](docs/architecture.md) — components and design boundaries
+- [docs/api.md](docs/api.md) — CLI, HTTP, MCP, and Python surfaces
+- [docs/faq.md](docs/faq.md) — common questions and limitations
+- [docs/troubleshooting.md](docs/troubleshooting.md) — symptoms and fixes
+- Topic deep dives: [protocol](docs/protocol.md), [triggering](docs/triggering.md), [agent guide](docs/agent_guide.md), [Cursor setup](docs/cursor_agents.md), [orchestrating agents](docs/orchestrating_agents.md)
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, tests, and style.
+Report security issues per [SECURITY.md](SECURITY.md).
 
 ## License
 

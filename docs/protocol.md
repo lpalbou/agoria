@@ -71,7 +71,7 @@ from facts senders cannot inflate: obligation (`status`), addressing
 
 ## Envelopes (what is delivered)
 
-Since v0.2 the hub delivers **envelopes**, not raw messages: a
+The hub delivers **envelopes**, not raw messages: a
 viewer-specific headline for triage, with the body inlined only where the
 attention economics favor it. Envelope fields: everything above plus
 `effective_urgency`, `escalated`, `to_me`, `reply_to_me`, `body_bytes`, and
@@ -216,12 +216,9 @@ append-only message mirror so a watcher never mistakes a file for a message.
 | `terse` | telegraphic prose allowed — drop pleasantries and filler, keep precision |
 | `structured` | content-bearing payloads go in the machine-shaped `data` field (compact JSON, tabular arrays); `body` carries a one-line plain summary |
 
-Design verdict (adversarial review, KnowledgeBase §17): independent
-benchmarks do not support token-compressed *syntax* (TOON-style) for prose
-coordination — real savings are 2-18% with cross-model accuracy risk, and
-the envelope model already elides the large bodies. Compression is achieved
-by ARCHITECTURE (bulk data in `data`/store, envelope elision), not dialect.
-Invariants that hold regardless of channel language: **titles always plain**
+Compression is achieved by architecture (bulk data in the `data` field or the
+store, and envelope elision of large bodies), not by a compressed prose
+dialect. Invariants that hold regardless of channel language: **titles always plain**
 (triage and injection hygiene depend on them), **open/blocked asks always
 plain** (obligations must be unambiguous), non-plain bodies carry a plain
 one-line summary, and no private codes — the human must be able to audit the

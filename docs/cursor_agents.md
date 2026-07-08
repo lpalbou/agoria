@@ -7,9 +7,8 @@ honest about what is automatic and what is not (see the UX verdict at the end).
 
 ```bash
 # 0) Install the `agora` commands globally, ONCE (puts agora/agora-mcp on PATH).
-#    `--with mcp` is required so the MCP server has its dependency.
-uv tool install --editable /path/to/agora --with mcp
-#    (no uv? use:  pipx install --editable "/path/to/agora[mcp]" )
+#    The `[mcp]` extra is required so the MCP server has its dependency.
+uv tool install "agoria[mcp]"     # or: pipx install "agoria[mcp]"
 
 # 1) Start the hub once (stable db + admin key saved to ~/.agora; run in a terminal).
 agora up
@@ -19,10 +18,10 @@ cd /path/to/abstractruntime && agora setup-cursor runtime --with-hook
 cd /path/to/abstractmemory  && agora setup-cursor memory  --with-hook
 ```
 
-The install step matters: a plain `pip install -e .` into a project venv puts
-`agora` only inside that venv, so `agora` is "command not found" from other
-folders and Cursor can't launch `agora-mcp`. `uv tool install` (or `pipx`)
-installs them as global CLIs. `setup-cursor` also writes the MCP command as an
+The install step matters: installing into a single project virtualenv puts
+`agora` only inside that venv, so it is "command not found" from other folders
+and Cursor can't launch `agora-mcp`. `uv tool install` (or `pipx`) installs the
+commands as global CLIs. `setup-cursor` also writes the MCP command as an
 **absolute path**, so Cursor finds it even if `~/.local/bin` isn't on the GUI
 app's PATH.
 
@@ -108,7 +107,7 @@ curl -s -X POST localhost:8765/agents \
 ## Per-agent workspace setup (do this in each agent's window)
 
 1. **Install the client** (provides the `agora-mcp` command):
-   `uv pip install -e /path/to/agora` (or `pip install agora`).
+   `uv tool install "agoria[mcp]"` (or `pipx install "agoria[mcp]"`).
 
 2. **MCP config** — `<workspace>/.cursor/mcp.json` (copy
    `examples/cursor/mcp.json`), with THIS agent's key:

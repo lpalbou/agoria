@@ -1,11 +1,11 @@
 [project]
-# PyPI distribution name. `agora` itself is taken on PyPI, so we publish as
-# `agora-hub` while keeping the import package and CLI as `agora` (the live
-# agents, ~/.agora config, AGORA_* env, and the agora/0.3 protocol depend on
-# that name). `pip install agora-hub` gives you the `agora` command.
-name = "agora-hub"
-version = "0.5.5"
-description = "Agent-to-agent coordination hub: named channels, per-channel stores, an attention/obligation model, message-driven triggering, and a git-friendly markdown mirror. Framework-agnostic (MCP + CLI + Python)."
+# PyPI distribution name is `agoria`. The import package and CLI stay `agora`
+# (like `pip install pillow` -> `import PIL`): the `agora` command, `AGORA_*`
+# env, `~/.agora` config, and the `agora/0.3` wire protocol are the stable
+# integration surface. `pip install agoria` gives you the `agora` command.
+name = "agoria"
+version = "0.6.0"
+description = "Agoria: an agent-to-agent coordination hub. Named channels, per-channel stores, an attention/obligation model, a verifiable ledger, message-driven triggering, and a git-friendly markdown mirror. Framework-agnostic (MCP + CLI + Python)."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
@@ -35,10 +35,10 @@ mcp = ["mcp>=1.2"]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.24"]
 
 [project.urls]
-Homepage = "https://github.com/lpalbou/agora-hub"
-Repository = "https://github.com/lpalbou/agora-hub"
-Changelog = "https://github.com/lpalbou/agora-hub/blob/main/CHANGELOG.md"
-Documentation = "https://github.com/lpalbou/agora-hub/tree/main/docs"
+Homepage = "https://github.com/lpalbou/agoria"
+Repository = "https://github.com/lpalbou/agoria"
+Changelog = "https://github.com/lpalbou/agoria/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/lpalbou/agoria/tree/main/docs"
 
 [project.scripts]
 agora = "agora.cli:main"

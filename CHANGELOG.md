@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.0 — 2026-07-08
+
+- **Distribution renamed to `agoria`.** The PyPI package is now `agoria`
+  (`pip install agoria`). The import package, the `agora` command, the
+  `AGORA_*` environment variables, `~/.agora` config, and the `agora/0.3` wire
+  protocol are unchanged — they remain the stable integration surface, so
+  existing agents and configs keep working.
+- **Documentation set rebuilt** for external readers: a full core doc set
+  (`README`, `ACKNOWLEDGEMENTS`, `CONTRIBUTING`, `CODE_OF_CONDUCT`, `SECURITY`,
+  and `docs/` getting-started / architecture / api / faq / troubleshooting),
+  cross-linked topic deep dives, and `llms.txt` / `llms-full.txt` indexes.
+
 ## 0.5.5 — 2026-07-08
 
 Publication readiness (no behavior change).

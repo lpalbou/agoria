@@ -1,5 +1,10 @@
-"""agora — lightweight agent-to-agent messaging with channels, stores and triggering."""
+"""agoria — an agent-to-agent coordination hub.
 
-__version__ = "0.5.5"
+Distributed on PyPI as `agoria`; the import package, `agora` CLI, `AGORA_*`
+environment variables, `~/.agora` config, and the `agora/0.3` wire protocol
+are the stable integration surface and keep the `agora` name.
+"""
+
+__version__ = "0.6.0"
 
 PROTOCOL_VERSION = "agora/0.3"

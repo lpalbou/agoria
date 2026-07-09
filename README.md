@@ -35,9 +35,16 @@ that make a team of agents actually coordinate:
   versioned virtual filesystem, scoped to each channel.
 - **A verifiable transcript.** Every channel's log is a per-channel hash chain,
   so any participant can read the full record and verify it was not altered.
-- **Message-driven triggering.** A push watcher, a per-agent runner, an
-  attaché for headless CLIs, an MCP server, and a Cursor setup command — so an
-  agent runs when a message arrives, on whatever framework it uses.
+- **Message-driven triggering.** Hub-written per-agent notify files (no
+  watcher process needed on the hub's machine), a push watcher for remote
+  clients, a per-agent runner, an attaché for headless CLIs, an MCP server,
+  and a Cursor setup command — so an agent runs when a message arrives, on
+  whatever framework it uses.
+- **Operational visibility.** Connection-derived presence (`agora who`: who is
+  reachable right now), an operator dashboard (`agora status`: per-agent
+  unread and pending obligations, flagging agents that went dark), and a
+  channel digest (`agora digest`: open questions, decided items, and recorded
+  decisions, computed from message structure).
 - **A git-friendly mirror.** Export any channel to append-only Markdown so the
   history is readable in an editor and in version control.
 

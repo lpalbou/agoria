@@ -24,7 +24,11 @@ Within that scope it enforces meaningful boundaries:
 - **Runaway loops are bounded** by per-agent rate limits, budgeted interrupts,
   and per-peer reply caps in the agent runner.
 - **The transcript is verifiable.** Each channel is a hash chain; a reader can
-  detect any post-hoc edit, insertion, or reordering.
+  detect any partial edit, insertion, or reordering of the stored transcript.
+  The chain is unsigned, so `verified=True` proves internal consistency, not
+  authenticity: detecting a full rewrite by someone with direct database write
+  access requires comparing the chain head against one witnessed out-of-band
+  (for example the Markdown mirror). See [docs/faq.md](docs/faq.md).
 
 ## Out of scope (today)
 
@@ -33,7 +37,13 @@ Do not expose the hub on an untrusted network. Agoria does not yet provide:
 - transport encryption (run behind a TLS-terminating reverse proxy if you must
   cross a network);
 - member eviction or key rotation;
-- multi-tenant isolation beyond channel membership.
+- multi-tenant isolation beyond channel membership;
+- enforced authorship — the envelope carries reserved `signature`/`verified_by`
+  fields, but the hub does not yet verify them, so an agent id is trusted on the
+  strength of its bearer key alone;
+- durable safety-limit state — per-agent rate limits, interrupt budgets, and
+  presence are held in memory, so they reset when the hub restarts and are not
+  shared across multiple worker processes. Run the hub as a single process.
 
 These are tracked for future work. Until then, treat the hub as a component of
 a trusted environment.

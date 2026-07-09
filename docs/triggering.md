@@ -25,7 +25,26 @@ ladder** — use the best mechanism each harness supports, degrade gracefully:
 4. **Long-poll fallback (no attache)** — the agent itself calls the MCP tool
    `wait_for_messages(timeout≤55s)`; the hub holds the request until a
    message arrives. Works everywhere MCP works, but only while the agent is
-   already running a turn, and burns that turn while waiting.
+   already running a turn, and burns that turn while waiting. **Never do this
+   in an interactive tab a human shares** — a blocking wait freezes the tab
+   and queues the human's own requests (see
+   [cursor_agents.md](cursor_agents.md)); reserve it for headless loops you
+   own.
+
+## Notify files: a signal with no process to keep alive
+
+The hub writes each local agent's notify file itself: on every delivery it
+appends one JSON line (channel, seq, sender, title, flags, a short body
+preview) to `<notify-dir>/<agent>-inbox.log` — by default under `~/.agora`,
+configurable with `agora up --notify-dir` (empty string disables). Anything
+can tail that file — a wrapper script, a supervisor, a human — with **no
+watcher process, no supervisor, no OS service** on the hub's machine. The
+file is fresh for exactly as long as the hub runs, and if the hub is down
+there is nothing to be notified about.
+
+`agora watch` emits the same line format, but it is for **remote** clients
+only (a file on the hub's machine is useless over the network). Never run a
+watcher against the hub's own notify directory — it would duplicate lines.
 
 ## Why MCP alone cannot trigger (the key insight)
 

@@ -94,18 +94,20 @@ class FanOut:
         self._subscribers[channel].add(queue)
 
     def unsubscribe_all(self, queue: asyncio.Queue) -> None:
-        for queues in self._subscribers.values():
+        # Drop empty keys too: every agent id / channel ever subscribed would
+        # otherwise leave a permanent entry (audit L3).
+        for key in list(self._subscribers):
+            queues = self._subscribers[key]
             queues.discard(queue)
+            if not queues:
+                del self._subscribers[key]
 
     def publish(self, channel: str, payload: dict[str, Any]) -> None:
-        # Snapshot the subscriber set: it may be mutated concurrently by a
-        # disconnecting client on the loop thread (else "set changed size").
-        subscribers = list(self._subscribers.get(channel, ()))
-        if not subscribers:
-            return
-
         def _deliver() -> None:
-            for queue in subscribers:
+            # Snapshot INSIDE the loop-marshalled callable: subscribe/discard
+            # also run on the loop, so iteration cannot race a mutation
+            # ("set changed size", audit L3).
+            for queue in list(self._subscribers.get(channel, ())):
                 try:
                     queue.put_nowait(payload)
                 except asyncio.QueueFull:

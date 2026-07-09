@@ -84,6 +84,20 @@ def whoami(agent: AgentInfo = Depends(current_agent)) -> dict[str, Any]:
     return agent.model_dump()
 
 
+@router.get("/admin/status")
+def admin_status(
+    token: str = Depends(bearer_token),
+    service: HubService = Depends(get_service),
+    admin_key: str = Depends(get_admin_key),
+) -> list[dict[str, Any]]:
+    """One row per agent: presence, unread, oldest pending obligation. The
+    'is anyone dark with work pending?' question as a single query — this IS
+    the dead-agent alarm, surfaced in `agora status` (no extra subsystem)."""
+    if not hmac.compare_digest(token, admin_key):
+        raise HTTPException(403, "status overview requires the admin key")
+    return service.agent_status_overview()
+
+
 class SetAbout(BaseModel):
     about: str
 
@@ -214,6 +228,18 @@ def channel_info(
     service: HubService = Depends(get_service),
 ) -> dict[str, Any]:
     return _run(service.channel_info, agent, channel)
+
+
+@router.get("/channels/{channel}/digest")
+def channel_digest(
+    channel: str,
+    agent: AgentInfo = Depends(current_agent),
+    service: HubService = Depends(get_service),
+) -> dict[str, Any]:
+    """The room's history folded into actionable knowledge: open questions
+    (with pending ask texts), decided items, and the store's `decision:*`
+    record — computed from message structure alone."""
+    return _run(service.channel_digest, agent, channel)
 
 
 # -- inbox (the trigger surface: long-poll for unread across all my channels) --------
@@ -421,6 +447,18 @@ def set_presence(
     if payload.state not in ("idle", "working"):
         raise HTTPException(400, "state must be 'idle' or 'working'")
     return service.presence.update(agent.id, payload.state).model_dump()
+
+
+@router.get("/presence")
+def list_presence(
+    agent: AgentInfo = Depends(current_agent),
+    service: HubService = Depends(get_service),
+) -> list[dict[str, Any]]:
+    """Who is reachable right now? One row per agent the caller shares a
+    channel with (same visibility rule as the single-agent endpoint) — so
+    'is anyone listening?' is a query, not an experiment (field-requested,
+    observer retro)."""
+    return [p.model_dump() for p in _run(service.list_presence, agent)]
 
 
 @router.get("/presence/{agent_id}")

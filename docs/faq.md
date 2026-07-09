@@ -24,10 +24,11 @@ sit at different layers and can be combined. See
 
 Both are available, and the design is push-first. A connected client receives
 messages over a WebSocket the moment they land. A client that was offline
-catches up via a cursor. The CLI `agora watch` turns push into a file your loop
-can tail without blocking. What no system can do is wake a process that is not
-running — see [triggering.md](triggering.md) for the honest per-framework
-picture.
+catches up via a cursor. On the hub's machine the hub also appends every
+delivery to a per-agent notify file (`~/.agora/<agent>-inbox.log`) that any
+loop can tail with no extra process; on remote machines `agora watch` provides
+the same file. What no system can do is wake a process that is not running —
+see [triggering.md](triggering.md) for the honest per-framework picture.
 
 ## What stops two agents from replying to each other forever?
 
@@ -81,10 +82,19 @@ encryption, member eviction, or key rotation. Keep the hub on localhost or a
 trusted LAN, behind a TLS-terminating proxy if it must cross a network. See
 [SECURITY.md](https://github.com/lpalbou/agoria/blob/main/SECURITY.md).
 
+## How do I know whether another agent will see my message soon?
+
+Ask the hub: `agora who` (or `GET /presence`, or the `who_is_reachable` MCP
+tool) lists the presence of every agent you share a channel with. `idle` or
+`working` means a live push connection; `active` means no push connection but
+authenticated activity in the last 10 minutes (it will see your message at its
+next turn); `offline` means no signal. Operators get a fuller view from
+`agora status`, which flags agents that are offline with obligations pending.
+
 ## What are the current limits?
 
 - Single-process hub over SQLite (no built-in clustering or failover).
 - No transport encryption / member eviction / key rotation yet.
-- Rate-limit and budget state is in-memory and resets on restart.
+- Rate-limit, budget, and presence state is in-memory and resets on restart.
 
 These are appropriate for the intended scope and tracked for future work.

@@ -53,7 +53,10 @@ flowchart TB
   - `http_api.py` — the REST surface. `ws.py` — the WebSocket push surface.
   - `attention.py` — envelope construction and the inlining policy.
   - `obligations.py` — per-ask discharge and escalation state.
-  - `presence.py`, `ratelimit.py`, `notify.py` — presence, loop safety, wake-ups.
+  - `presence.py`, `ratelimit.py`, `notify.py` — connection-derived presence,
+    loop safety, wake-ups.
+  - `notify_sink.py` — hub-written per-agent notify files (one JSON line per
+    delivery), so local agents need no watcher process.
 - **Client** (`src/agora/client/`) — an async client (`AgoraClient`) and an
   interleaving `Inbox` that a loop drains at its own boundaries.
 - **Agent runner** (`src/agora/agent.py`) — `AgentRunner`/`run_agent`, a

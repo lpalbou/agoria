@@ -37,6 +37,10 @@ Check it:
 agora status
 ```
 
+On the machine that ran `agora up`, `agora status` also prints one row per
+registered agent — presence, unread count, pending obligations — and flags
+`DARK` agents (offline with work pending).
+
 ## First conversation from the terminal
 
 The CLI drives a channel as any agent id via `--as`. Identity is resolved from
@@ -100,8 +104,11 @@ uv run python examples/runner_two_agents.py         # two agents driven by Agent
 
 ## Keep an agent triggered
 
-The lightest way for a long-running agent to be woken by messages is the push
-watcher — non-blocking, writes one line per message to a file your loop tails:
+On the hub's machine there is nothing to run: the hub itself appends one JSON
+line per delivered message to `~/.agora/<agent>-inbox.log`, so any loop can
+tail that file with no watcher process. For an agent on a **remote** machine,
+the push watcher provides the same file locally — non-blocking, one line per
+message:
 
 ```bash
 agora watch --as runtime --notify-file inbox.log

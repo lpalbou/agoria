@@ -56,9 +56,21 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
     await websocket.accept()
     service.bind_loop(asyncio.get_running_loop())  # fan-out wakes us thread-safely
     queue: asyncio.Queue = asyncio.Queue(maxsize=_QUEUE_SIZE)
-    service.presence.update(agent.id, "idle")
+    # Connection-derived presence: holding this socket IS reachability.
+    service.presence.connect(agent.id)
+    # Identity-keyed fan-out: every message in a channel this agent BELONGS to
+    # reaches this connection, even for channels born after connect (a fresh
+    # DM was previously undeliverable until the watcher restarted). Channel
+    # subscriptions below still matter for backlog catch-up; the client dedups
+    # any double delivery by per-channel seq.
+    service.fanout.subscribe(f"agent/{agent.id}", queue)
 
     async def pump_outgoing() -> None:
+        # Per-connection high-water: the same queue is subscribed under both
+        # the channel key and the agent/<id> key, so each message arrives
+        # twice — dedup here so the wire carries one envelope per message
+        # (audit M1). Seq is per-channel monotonic and puts are loop-ordered.
+        sent: dict[str, int] = {}
         while True:
             payload = await queue.get()
             if payload.get("type") == "message":
@@ -67,6 +79,16 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                 message = Message(**payload["message"])
                 if message.sender == agent.id:
                     continue
+                if message.seq <= sent.get(message.channel, 0):
+                    continue
+                # Membership at DELIVERY time: channel subscriptions are only
+                # checked at subscribe time, so without this an agent that
+                # left a channel would keep receiving its live pushes for the
+                # life of the socket (audit H2 — membership is THE isolation
+                # boundary).
+                if not service.db.is_member(message.channel, agent.id):
+                    continue
+                sent[message.channel] = message.seq
                 envelope = service.envelope_for(agent.id, message)
                 payload = {"type": "envelope", "envelope": envelope.model_dump()}
             await websocket.send_text(json.dumps(payload))
@@ -74,14 +96,21 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
     pump = asyncio.create_task(pump_outgoing())
     try:
         while True:
-            frame = json.loads(await websocket.receive_text())
+            raw = await websocket.receive_text()
+            try:
+                frame = json.loads(raw)
+            except ValueError:
+                # Malformed text must get an error frame, not a server
+                # traceback that tears the connection down (audit L5).
+                queue.put_nowait({"type": "error", "detail": "malformed frame: not valid JSON"})
+                continue
             await _handle_frame(service, agent, frame, queue)
     except WebSocketDisconnect:
         pass
     finally:
         pump.cancel()
         service.unsubscribe(queue)
-        service.presence.update(agent.id, "offline")
+        service.presence.disconnect(agent.id)
 
 
 async def _handle_frame(service: HubService, agent, frame: dict, queue: asyncio.Queue) -> None:

@@ -65,7 +65,8 @@ class HubError(Exception):
 
 class HubService:
     def __init__(self, db: Database, *, rate_per_minute: float = 60.0,
-                 interrupts_per_hour: int = 6, criticals_per_hour: int = 5) -> None:
+                 interrupts_per_hour: int = 6, criticals_per_hour: int = 5,
+                 notify_sink=None) -> None:
         self.db = db
         # One shared binder so fan-out and long-poll wakes marshal onto the
         # same serving loop from synchronous (threadpool) request handlers.
@@ -77,6 +78,10 @@ class HubService:
         self.attention = AttentionPolicy()
         self.interrupt_budget = SlidingWindowBudget(interrupts_per_hour)
         self.critical_budget = SlidingWindowBudget(criticals_per_hour)
+        # Hub-written notify files (see hub/notify_sink.py): liveness without
+        # resident processes — the hub maintains each local agent's
+        # <id>-inbox.log itself, the way the file mailbox's filesystem did.
+        self.notify_sink = notify_sink
 
     def bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         """Record the serving event loop. Called by every async entry point
@@ -115,6 +120,10 @@ class HubService:
         agent = self.db.agent_by_key(api_key)
         if agent is None:
             raise HubError(401, "invalid api key")
+        # Every authenticated call is a liveness signal: MCP/REST-only tabs
+        # have no push connection, and without this they read "offline" while
+        # visibly working.
+        self.presence.touch(agent.id)
         return agent
 
     # -- channels ---------------------------------------------------------------
@@ -370,7 +379,22 @@ class HubService:
         self._wake(message)
 
     def _wake(self, message: Message) -> None:
-        self.fanout.publish(message.channel, {"type": "message", "message": message.model_dump()})
+        payload = {"type": "message", "message": message.model_dump()}
+        self.fanout.publish(message.channel, payload)
+        # Membership-keyed fan-out: reaches connected members whose channel
+        # subscription predates this channel's existence (e.g. a DM opened
+        # after their watcher connected — previously silently undeliverable
+        # until the watcher restarted). The "agent/" prefix cannot collide
+        # with channel names ("/" is rejected in channel slugs). Clients
+        # dedup by per-channel seq, so double delivery is harmless.
+        for member in self.db.list_members(message.channel):
+            self.fanout.publish(f"agent/{member.agent_id}", payload)
+            # Hub-written notify file: each member's <id>-inbox.log stays
+            # fresh with zero agent-side processes (viewer-specific envelope,
+            # skip the sender's own posts, best-effort).
+            if self.notify_sink is not None and member.agent_id != message.sender:
+                self.notify_sink.deliver(
+                    member.agent_id, self.envelope_for(member.agent_id, message))
         self.notifier.notify()
 
     def get_messages(self, agent: AgentInfo, channel: str,
@@ -381,6 +405,91 @@ class HubService:
         read_message to actually attend to (and clear) a specific message."""
         self.require_membership(channel, agent.id)
         return self.db.get_messages(channel, since_seq, limit)
+
+    def channel_digest(self, agent: AgentInfo, channel: str) -> dict[str, Any]:
+        """Fold a channel's history into actionable knowledge — mechanically,
+        from structure the messages already carry (no NLP, no embeddings):
+
+        - open_questions: open/blocked messages not yet discharged, with their
+          pending ask texts (asks/answers make Q->A pairs mechanical).
+        - decided: discharged obligations (who answered) and `resolved` posts.
+        - decisions: the channel store's `decision:*` keys — the room's
+          distilled, versioned decision record (written by convention when a
+          thread resolves).
+
+        This is the 'cheap view' half of the knowledge norm; the distillation
+        practice (writing decision keys) stays with the agents."""
+        self.require_membership(channel, agent.id)
+        open_questions: list[dict[str, Any]] = []
+        decided: list[dict[str, Any]] = []
+        cursor = 0
+        while True:
+            page = self.db.get_messages(channel, cursor)
+            if not page:
+                break
+            cursor = page[-1].seq
+            for m in page:
+                if m.kind != Kind.message:
+                    continue
+                brief = {"seq": m.seq, "id": m.id, "from": m.sender,
+                         "title": m.title, "created_at": m.created_at}
+                if m.status in (Status.open, Status.blocked):
+                    replies = self.db.replies_to(m.id)  # one query, reused
+                    state = discharge_state(m, replies)
+                    # Resolution-by-follow-up: a `resolved` reply in the thread
+                    # closes the question regardless of sender — otherwise an
+                    # asker who answered their own question would sit in
+                    # open_questions forever while their resolved post sits in
+                    # decided (review H2, self-contradiction).
+                    self_resolved = any(r.status == Status.resolved for r in replies)
+                    if state.discharged or self_resolved:
+                        if asks_of(m):
+                            # Credit only repliers who actually answered an ask
+                            # (a "bump" reply must not be listed, review M2).
+                            ask_ids = {str(a["id"]) for a in asks_of(m)}
+                            answered_by = sorted({
+                                r.sender for r in replies
+                                if r.sender != m.sender and ask_ids
+                                & {str(x) for x in (r.data or {}).get("answers", []) or []}
+                            })
+                        else:
+                            answered_by = sorted({r.sender for r in replies
+                                                  if r.sender != m.sender})
+                        decided.append({**brief, "answered_by": answered_by,
+                                        **({"self_resolved": True}
+                                           if self_resolved and not state.discharged else {})})
+                    else:
+                        asks = {str(a["id"]): a.get("text", "") for a in asks_of(m)}
+                        open_questions.append({
+                            **brief, "status": m.status.value,
+                            "pending_asks": [{"id": i, "text": asks.get(i, "")}
+                                             for i in state.pending],
+                        })
+                elif m.status == Status.resolved:
+                    decided.append({**brief, "resolved": True})
+        decisions = []
+        for entry in self.db.store_keys(channel):
+            if not entry["key"].startswith("decision:"):
+                continue
+            stored = self.db.store_get(channel, entry["key"])
+            if stored is not None:
+                decisions.append({"key": entry["key"], "value": stored.value,
+                                  "version": stored.version,
+                                  "updated_by": stored.updated_by})
+        # open_questions must be complete (an unanswered seq-5 question still
+        # matters), but `decided` grows forever: cap it newest-first and keep
+        # the total so truncation is visible (review M1).
+        decided_total = len(decided)
+        decided = sorted(decided, key=lambda d: d["seq"], reverse=True)[:50]
+        return {
+            "channel": channel,
+            "open_questions": open_questions,
+            "decided": decided,
+            "decisions": decisions,
+            "counts": {"open_questions": len(open_questions),
+                       "decided_shown": len(decided), "decided_total": decided_total,
+                       "decisions": len(decisions)},
+        }
 
     # -- envelopes (viewer-specific delivery) ------------------------------------
 
@@ -694,6 +803,39 @@ class HubService:
                 if len(out) >= limit:
                     break
         return out
+
+    def agent_status_overview(self) -> list[dict[str, Any]]:
+        """Operator overview: per agent, presence + unread count + the oldest
+        still-pending obligation's age. Reuses the exact inbox computation the
+        agent itself would see, so the numbers cannot disagree with reality."""
+        now = time.time()
+        out = []
+        for agent_id in self.db.list_agent_ids():
+            envelopes = self.inbox(AgentInfo(id=agent_id, name=agent_id))
+            pending = [e for e in envelopes
+                       if e.status in (Status.open, Status.blocked) or e.critical]
+            oldest = min((e.created_at for e in pending), default=None)
+            presence = self.presence.get(agent_id)
+            out.append({
+                "agent_id": agent_id,
+                "state": presence.state,
+                "unread": len(envelopes),
+                "pending_obligations": len(pending),
+                "oldest_pending_minutes": round((now - oldest) / 60, 1) if oldest else None,
+            })
+        return out
+
+    def list_presence(self, agent: AgentInfo) -> list:
+        """Presence of every agent the caller shares a channel with (self
+        included). Operators see everyone. Same visibility boundary as
+        get_presence: no global who-exists oracle for ordinary agents."""
+        if agent.operator:
+            visible = set(self.db.list_agent_ids())
+        else:
+            visible = {agent.id}
+            for channel in self.db.channels_of(agent.id):
+                visible.update(m.agent_id for m in self.db.list_members(channel))
+        return [self.presence.get(a) for a in sorted(visible)]
 
     def get_presence(self, agent: AgentInfo, target_id: str):
         """Presence is visible to yourself, to operators, and to agents you

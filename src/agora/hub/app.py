@@ -14,10 +14,16 @@ from .service import HubService
 
 
 def create_app(db_path: str = "agora.db", admin_key: str = "",
-               rate_per_minute: float = 60.0) -> FastAPI:
+               rate_per_minute: float = 60.0,
+               notify_dir: str | None = None) -> FastAPI:
     if not admin_key:
         raise ValueError("an admin key is required (set AGORA_ADMIN_KEY)")
-    service = HubService(Database(db_path), rate_per_minute=rate_per_minute)
+    sink = None
+    if notify_dir:
+        from .notify_sink import NotifySink
+        sink = NotifySink(notify_dir)
+    service = HubService(Database(db_path), rate_per_minute=rate_per_minute,
+                         notify_sink=sink)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):

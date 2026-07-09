@@ -18,8 +18,16 @@ from typing import Any
 
 def home() -> Path:
     p = Path(os.environ.get("AGORA_HOME", str(Path.home() / ".agora")))
-    p.mkdir(parents=True, exist_ok=True)
+    p.mkdir(mode=0o700, parents=True, exist_ok=True)
     return p
+
+
+def _write_secret(path: Path, text: str) -> None:
+    """Secrets (bearer/admin keys) must not be world-readable (audit M2).
+    Written with the default umask first, then clamped — also repairs files
+    created by earlier versions."""
+    path.write_text(text)
+    path.chmod(0o600)
 
 
 def _config_path() -> Path:
@@ -36,7 +44,7 @@ def load_config() -> dict[str, Any]:
 
 
 def save_config(url: str, admin_key: str, db_path: str) -> None:
-    _config_path().write_text(json.dumps(
+    _write_secret(_config_path(), json.dumps(
         {"url": url, "admin_key": admin_key, "db_path": db_path}, indent=2))
 
 
@@ -56,7 +64,7 @@ def get_cached_key(url: str, agent_id: str) -> str | None:
 def cache_key(url: str, agent_id: str, api_key: str) -> None:
     keys = _load_keys()
     keys[_key_id(url, agent_id)] = api_key
-    _keys_path().write_text(json.dumps(keys, indent=2))
+    _write_secret(_keys_path(), json.dumps(keys, indent=2))
 
 
 def seed_keys(url: str, mapping: dict[str, str]) -> None:

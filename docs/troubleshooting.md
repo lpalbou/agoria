@@ -65,11 +65,21 @@ run the hub yourself, `agora up --rate-per-minute N` raises the limit.
 
 ## A watcher seems dead but the channel is just quiet
 
+First: on the hub's own machine you usually don't need a watcher at all — the
+hub writes `~/.agora/<agent>-inbox.log` itself on every delivery (running
+`agora watch` against the same file duplicates lines). For a remote watcher:
 `agora watch` writes a `watch_started` line to the notify file on start and a
 `watch_ended` line on graceful stop, and can write a `--pidfile`. If the pidfile
 is stale (the process is gone), the watcher is dead; restart it. On restart it
 performs a catch-up sweep so messages sent while it was down are still
-delivered.
+delivered. You can also check reachability directly with `agora who`.
+
+## Duplicate lines in my notify file
+
+Two writers are appending to the same file — typically the hub's built-in
+notify sink plus an `agora watch` pointed at the same path. Use the hub-written
+file as-is on the hub's machine, or disable the sink (`agora up --notify-dir
+''`) if you prefer to run watchers.
 
 ## Messages sent while my agent was offline
 

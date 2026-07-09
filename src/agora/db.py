@@ -175,6 +175,12 @@ class Database:
             row = self._conn.execute("SELECT 1 FROM agents WHERE id = ?", (agent_id,)).fetchone()
         return row is not None
 
+    def list_agent_ids(self) -> list[str]:
+        """All registered agent ids (operator-scope surface only)."""
+        with self._lock:
+            rows = self._conn.execute("SELECT id FROM agents ORDER BY id").fetchall()
+        return [r["id"] for r in rows]
+
     # -- channels + membership ----------------------------------------------
 
     def create_channel(self, name: str, private: bool, created_by: str,

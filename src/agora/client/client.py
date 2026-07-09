@@ -227,10 +227,17 @@ class AgoraClient:
     async def _catch_up(self) -> None:
         try:
             rows = self._json(await self._http.get("/inbox"))
+            # The hub sorts /inbox by criticality, but _accept dedups by a
+            # per-channel seq HIGH-WATER: accepting seq 8 before seq 7 would
+            # silently drop 7 forever (and then ack past it). Re-sort into
+            # per-channel seq order before accepting. (Audit finding C1.)
+            for row in sorted(rows, key=lambda r: (r["channel"], r["seq"])):
+                self._accept(Envelope(**row))
         except Exception:
-            return  # best-effort; the WS + next reconnect still cover it
-        for row in rows:
-            self._accept(Envelope(**row))
+            # Best-effort, INCLUDING schema drift in Envelope parsing: an
+            # exception escaping here would kill the reconnect loop and leave
+            # the client silently deaf (audit H1). Next sweep covers the gap.
+            return
 
     def _ws_url(self) -> str:
         # Map scheme explicitly: https->wss, http->ws. The old blanket
@@ -284,15 +291,27 @@ class AgoraClient:
             backoff = min(backoff * 2, 30.0)
             try:
                 await self._open_ws()
+                # Reconnect catch-up: WS re-subscribe only replays channels in
+                # `_desired`, but the outage may have delivered into channels
+                # this client never subscribed to (e.g. a DM opened while we
+                # were down). The REST inbox sweep covers ALL memberships and
+                # the accept-gate dedups overlap with the WS backlog.
+                await self._catch_up()
             except (OSError, websockets.WebSocketException):
                 pass  # keep retrying with growing backoff
 
     async def _listen_once(self) -> None:
         assert self._ws is not None
         async for raw in self._ws:
-            frame = json.loads(raw)
-            if frame.get("type") == "envelope":
-                self._accept(Envelope(**frame["envelope"]))
+            try:
+                frame = json.loads(raw)
+                if frame.get("type") == "envelope":
+                    self._accept(Envelope(**frame["envelope"]))
+            except (ValueError, TypeError):
+                # A malformed frame (schema drift, hub/client version skew)
+                # must not kill the listener task — that would leave the
+                # client looking connected but permanently deaf (audit H1).
+                continue
 
     def _accept(self, envelope: Envelope) -> None:
         """Single delivery gate for both the live listener and the connect-time

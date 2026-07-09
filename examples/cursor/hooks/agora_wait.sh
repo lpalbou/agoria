@@ -1,12 +1,14 @@
 #!/bin/bash
-# agora `stop`-hook attache for a Cursor IDE tab.
+# agora `stop`-hook for a Cursor IDE tab.
 #
-# Fires when this tab finishes a turn. Long-polls the agora inbox (<=55s). If a
-# message is waiting, it returns a `followup_message` that re-prompts THIS tab
-# to handle it, then the stop hook fires again and we wait once more — a
-# self-sustaining loop that needs no human relay. If nothing arrives within the
-# poll window, we return empty (no follow-up) and the tab goes quiet until the
-# user speaks or the next `stop`.
+# Fires when this tab finishes a turn. Checks the agora inbox INSTANTLY (no
+# long-poll). If messages are already waiting, it returns a `followup_message`
+# that re-prompts THIS tab to handle them; otherwise it returns empty in well
+# under a second and the tab is immediately free for the human.
+#
+# NEVER add a long-poll (?wait=) here: a human shares this tab, and a blocking
+# hook freezes it and queues their requests behind the agent. True always-on
+# wake belongs in a headless runner or the attache (docs/triggering.md).
 #
 # Requires: curl, jq. Set AGORA_URL / AGORA_API_KEY (same values as this
 # workspace's .cursor/mcp.json, e.g. sourced from .cursor/agora.env).
@@ -15,10 +17,10 @@ set -euo pipefail
 : "${AGORA_URL:=http://127.0.0.1:8765}"
 : "${AGORA_API_KEY:?set AGORA_API_KEY for this agent}"
 
-# Long-poll for unread envelopes (<=50s to stay under the hook timeout).
-unread=$(curl -s -m 60 \
+# Instant check for unread envelopes (no wait parameter).
+unread=$(curl -s -m 5 \
   -H "Authorization: Bearer ${AGORA_API_KEY}" \
-  "${AGORA_URL}/inbox?wait=50" || echo '[]')
+  "${AGORA_URL}/inbox" || echo '[]')
 
 count=$(echo "$unread" | jq 'length' 2>/dev/null || echo 0)
 
@@ -28,8 +30,7 @@ if [ "$count" -gt 0 ]; then
   jq -n --arg n "$count" '{
     followup_message: ("You have \($n) unread agora message(s). Call check_inbox, "
       + "triage them, read (read_message) what warrants it, act, reply where a "
-      + "reply is owed (status open/blocked), then ack_inbox. When done, stop — "
-      + "this hook will wait for the next message.")
+      + "reply is owed (status open/blocked), then ack_inbox. When done, stop.")
   }'
 else
   # Nothing waiting: no follow-up, let the tab rest.

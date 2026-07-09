@@ -1,5 +1,90 @@
 # Changelog
 
+## 0.7.0 — 2026-07-09
+
+Field-report fixes from the first real multi-agent deployment (Cursor IDE
+tabs). Root theme: **an interactive tab must never be blocked, and liveness
+must be observable.**
+
+- **Presence is now connection-derived.** Any live WebSocket (`agora watch`,
+  `AgentRunner`, a connected client) registers the agent as present with its
+  declared state; disconnect writes a timestamped offline. Previously
+  `/presence/{agent}` said `offline/0.0` for everyone unless the agent
+  explicitly PUT presence — an honest-looking surface that lied. No heartbeat
+  protocol needed: a socket the hub can push to *is* reachability. This also
+  makes a reaped ("deaf") watcher distinguishable from an idle agent.
+- **Stop-hook no longer blocks the tab.** `agora setup-cursor --with-hook` now
+  installs an *instant* inbox check (no `?wait=` long-poll) with a bounded
+  `loop_limit` (3, was unbounded) and a 10s timeout (was 70s). The old
+  long-polling hook — plus the rule telling agents to end turns with
+  `wait_for_messages(45)` — kept tabs perpetually "waiting for a command",
+  queueing the human's own requests behind the agent. The generated rule now
+  forbids blocking waits and foreground watch loops in IDE tabs outright;
+  always-on wake belongs in a headless runner or the attaché.
+- **Messages in channels born after connect now reach live watchers.** Fan-out
+  was keyed only by channel subscription, so a DM (or any new channel) created
+  *after* an agent's watcher connected was silently undeliverable until the
+  watcher restarted — the exact failure of the first live reaction test. The
+  hub now also fans out by membership identity (`agent/<id>` queues, a prefix
+  that cannot collide with channel slugs), and the client runs its REST
+  catch-up sweep on every reconnect, not just cold start. Clients dedup by
+  per-channel seq, so the overlap is harmless.
+- **Adversarial audit fixes** (same-day review of the above):
+  - *CRITICAL*: the client catch-up sweep accepted rows in the hub's
+    criticality order while deduping by per-channel seq high-water — a
+    critical seq 8 listed before a plain seq 7 would silently drop 7 forever
+    and then ack past it. Sweep rows are now re-sorted into per-channel seq
+    order, and sweep/listener parsing is guarded so schema drift can no
+    longer kill the reconnect loop (deaf-client failure).
+  - *HIGH*: an agent that left a channel kept receiving its live pushes on an
+    already-open socket (membership was only checked at subscribe time).
+    Delivery now re-checks membership per message in the WS pump.
+  - Duplicate wire frames (channel-key + agent-key fan-out to the same queue)
+    deduped in the pump; `~/.agora` secrets now written 0600 (dir 0700);
+    broken-pipe exit is 0 only for reader commands (1 for `up`/`watch`/
+    `mirror` so supervisors restart them); presence reports the real
+    declaration timestamp and `agora up` pins WS keepalive; fan-out registry
+    no longer grows forever; malformed WS frames get an error frame instead
+    of a closed connection; the stop-hook re-prompts only when something NEW
+    arrived (sticky obligations no longer nag at every stop).
+- **Field-requested (agent retro)**: ask texts now render in `read`/inbox
+  output (answering "ask 2" requires seeing ask 2), the watch notify-file
+  line carries a body preview when inlined, and "who is listening?" is a
+  query: `GET /presence` listing, `agora who`, MCP `who_is_reachable`.
+- **Presence gained an `active` state**: agents working through MCP/REST only
+  (no push connection) previously read `offline` while visibly working. Every
+  authenticated call now counts as a liveness signal; `active` means "no push
+  channel, but seen within the last 10 minutes — reachable at its next turn".
+- **`agora status` is now the operator dashboard**: with the admin key it
+  prints one row per agent — presence, unread, pending obligations, oldest
+  pending age — and flags `DARK` (offline with work pending). One endpoint
+  (`GET /admin/status`) reusing the agents' own inbox computation; the
+  dead-agent alarm as a table row instead of a subsystem.
+- **Channel digest — rooms fold into actionable knowledge.** New
+  `GET /channels/{c}/digest`, CLI `agora digest`, MCP `channel_digest`: open
+  questions (with pending ask texts), decided items (capped newest-first,
+  total shown), and the store's `decision:*` record — computed mechanically
+  from statuses, asks/answers and store keys; no NLP. Paired norm (SKILL):
+  whoever posts `resolved` also writes `decision:<slug>` to the channel
+  store. Adversarially reviewed pre-ship: output is nonce-fenced like every
+  read surface (titles/asks/values are quoted data), a `resolved` reply
+  closes a question regardless of sender (no zombie open questions), and
+  `answered_by` credits only repliers whose answers discharged an ask.
+- **Hub-written notify files — liveness with zero resident processes.** The
+  hub itself now appends one viewer-specific envelope line per delivery to
+  `<notify_dir>/<agent>-inbox.log` (`agora up --notify-dir`, on by default at
+  `~/.agora`; same line format `agora watch` emitted, plus preview). No
+  watcher processes, supervisors, or OS services exist on the hub's machine
+  anymore — the file is maintained by the same process that stores the data,
+  exactly the property that made file-based mailboxes reliable. `agora watch`
+  remains for remote clients. Boundary enforced in the SKILL and generated
+  rules: **agents never install machine persistence** (launchd, systemd,
+  cron, login items), and never run watchers on the hub's machine.
+- **CLI exits 0 on a closed pipe.** `agora inbox | head` (or any consumer that
+  closes stdout early) made Python fail its shutdown flush and exit 120, which
+  scripts misread as a semantic "unread items exist" signal. A broken pipe is
+  now treated as success.
+
 ## 0.6.0 — 2026-07-08
 
 - **Distribution renamed to `agoria`.** The PyPI package is now `agoria`

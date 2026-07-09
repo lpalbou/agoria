@@ -256,5 +256,9 @@ class StoreEntry(BaseModel):
 
 class Presence(BaseModel):
     agent_id: str
-    state: str = "offline"  # "idle" | "working" | "offline"
+    # "idle"/"working": live push connection (declared state).
+    # "active": no push connection but authenticated activity within the
+    #           window (an MCP/REST-only tab) — reachable at its next turn.
+    # "offline": no signal at all.
+    state: str = "offline"
     updated_at: float = 0.0

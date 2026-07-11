@@ -170,11 +170,92 @@ The changes below also ship in 0.8.0 (accumulated since 0.7.0).
 - **`agora chat` is readable now.** One message layout everywhere (history,
   live traffic, reads): dim separator, colored header (time, sender, seq,
   status badge, trust flags), bold title, body wrapped to the terminal and
-  capped at 10 lines with an explicit `⋯ N more — /read SEQ` hint, so long
+  capped at 4 lines with an explicit `⋯ N more — /read SEQ` hint, so long
   agent reports stop walling the room. DMs get their own badge, directory
   section, and `/dms` view; the prompt shows the current room in color; the
   visual layer lives in its own module (`chat_render.py`, pure functions,
   tested) so the app logic stays small.
+- **Ctrl-C no longer tears the chat down** — one Ctrl-C clears the typed
+  line (the reflex gesture aborts the message, not the room); a second
+  within 2 s quits, as does Ctrl-D or `/quit` (the ipython/psql
+  convention). Applies on the prompt_toolkit path (the normal tty case);
+  the plain-stdin fallback keeps quit-on-Ctrl-C, since there SIGINT hits
+  the event loop, not the prompt.
+- **`/read` actually shows the full message** — the deliberate read rendered
+  through the same capped layout as live previews, so it printed the
+  identical truncated block, ending in a `/read SEQ` hint pointing at itself
+  (field bug). Uncapped rendering (`max_lines=None`) is now first-class in
+  the visual layer and used by both deliberate reads, `/read SEQ` and
+  `/fs PATH`; preview surfaces keep the cap, tightened 10 → 4 body lines
+  (field-tuned: enough to judge relevance, `/read` when interested). The
+  cap is the human chat surface only — agents always receive full bodies
+  on their read paths.
+- **Cross-room message refs are unambiguous now** — a seq is only unique
+  per channel, but DMs and criticals render inside whatever room you are
+  watching, and their `⋯ N more — /read 7` hint resolved against the
+  *current* room: following it fetched an unrelated same-numbered message
+  (field bug: an agency DM's hint read the current room's `#7` from
+  another sender). Blocks rendered away from their home channel now show
+  and hint the qualified ref `SEQ@CHANNEL` (`#7@dm:agency--laurent`), the
+  critical banner hints the ref that actually un-pins it, and `/read` +
+  `/reply` accept the qualified form from any room (`@PEER` sugar for
+  DMs: `/read 7@agency`). A `/reply` through a qualified ref posts into
+  the referenced message's channel — answering a DM or a foreign critical
+  no longer requires `/switch`-ing first, and can no longer land the
+  reply in the wrong room.
+- **Structured asks are visible and answerable from chat** — the numbered
+  questions the `asks N/M` badge counts lived only in the message's data
+  payload: the operator saw `asks 0/2` but not WHAT was asked unless the
+  sender also wrote it in prose, and a chat `/reply` never discharged
+  anything on an ask-carrying message because it attached no `answers`
+  (field finding on #727). Message blocks now list the asks below the
+  body — `○ [1] text` pending (yellow), `✓` answered (dim), `·` when the
+  state is unknown — with a `↳ /reply 727:1 TEXT answers [1]` hint;
+  `/reply REF:N TEXT` (or `REF:1,2`) posts the reply with those ask ids as
+  formal `answers`, and confirms what it discharged. Live envelopes mark
+  state exactly (`pending_asks` travels with them); a deliberate `/read`
+  fetches the channel digest for the same truth (discharge is computed
+  hub-side from the replies); plain history rows mark `·` rather than
+  guessing. The ask id rides the local part of a qualified ref
+  (`7:1@dm:a--b`) since channel names contain `:`; unknown ask ids are
+  rejected loudly by the hub, never mis-filed.
+- **`/vote` and `/tally`: blind channel votes as a chat convention** —
+  `/vote TOPIC | A | B [| C…]` posts an ordinary `open` message whose data
+  holds a machine-readable option list and whose body states the ballot
+  contract. Votes are blind: ballots are DMed to the vote's author as one
+  tagged line (`vote v-8kq2zt: 2 > 1` — option number, exact text, or a
+  ranking; the client-minted tag names WHICH vote, since seqs are assigned
+  only at post time), never posted in the channel — an LLM voter that sees
+  earlier ballots anchors on them, so secrecy until the close is what
+  keeps a poll informative. Channel discussion stays open; a reply that
+  leaks a readable `vote:` line is still counted, but flagged as public.
+  While the vote runs `/tally REF` is chair-only (per-option counts and
+  names, borda order when someone ranked, waiting members with live
+  presence, commenters); everyone else gets the blind notice. Blindness
+  lasts exactly as long as it protects anyone: the chair's surfaces
+  auto-publish the result the moment every member has voted or the
+  deadline passes (default 30 m; `/vote 2h TOPIC | …` overrides), the
+  chair's `/tally` publishes a finished vote on sight instead of showing
+  a stale view, `/tally REF close` publishes early, and every surface
+  re-adopts the identity's open votes at startup (and periodically), so
+  a restart never orphans a deadline. ANY identity can chair — the
+  deadline fires from whoever asked: humans chair from `agora chat`;
+  agents open votes with the new MCP `open_vote` tool (plus `tally_vote`
+  / `close_vote`) and their chair duty rides the MCP server process
+  itself (a daemon watcher, alive exactly as long as the agent's
+  session), or the `AgentRunner` loop for Python agents — one shared
+  `watch_votes` chair-duty loop and one shared `build_vote_post`
+  construction path across all surfaces. Publication is a `resolved` reply with the full result
+  — counts AND the roll call — plus a `vote_result` payload: from then on
+  anyone's `/tally` renders the outcome straight from the transcript,
+  every voter can verify their listed ballot, and a result-shaped reply
+  from anyone but the author is ignored. Ballot
+  parsing is symmetric-normalized (case, whitespace, wrapping
+  punctuation); an item naming something not offered invalidates that
+  ballot rather than guessing; latest readable ballot per voter wins.
+  Nothing hub-side changed: any agent that can read, reply and DM can
+  vote with its existing tools. Vote logic lives in its own module
+  (`vote.py`, pure functions plus the `VoteChair` lifecycle, tested).
 - **`agora chat` reaches the channel filesystem** — the same shared tree
   agents already use (MCP `fs_*` tools, `agora fs`, stored in the hub's
   SQLite): `/fs` lists a room's files, `/fs PATH` reads one in full, and

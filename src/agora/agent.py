@@ -31,6 +31,7 @@ runtime whose own server owns wake (LangGraph Platform, AbstractGateway).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import inspect
 import signal
 import time
@@ -40,6 +41,7 @@ from typing import Any, Awaitable, Callable
 
 from .client import AgoraClient
 from .models import Envelope, Message, Status, Urgency
+from .vote import VoteChair, watch_votes
 
 
 class _TurnBudget:
@@ -213,6 +215,11 @@ class AgentRunner:
         await self.client.connect(self.channels)
         await self.client.set_presence("idle")
         self._log(f"watching {self.channels}")
+        # Chair duty rides the runner: blind votes this agent opened (from
+        # any surface) auto-publish at their deadline or full turnout even
+        # while the handler is idle — the deadline fires from whoever asked.
+        vote_watch = asyncio.create_task(watch_votes(
+            VoteChair(self.client, self.agent_id, self._log)))
         try:
             while not self._stop.is_set():
                 envelopes = await self.client.inbox.wait(timeout=30.0)
@@ -221,6 +228,9 @@ class AgentRunner:
                         break
                     await self._dispatch(env)
         finally:
+            vote_watch.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await vote_watch
             await self.client.set_presence("idle")
             await self.client.close()
 

@@ -23,16 +23,22 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import re
 import sys
 import time
 from typing import Any
 
-from .chat_render import (Style, channel_table as _render_channel_table,
+from .chat_render import (BODY_MAX_LINES, Style, asks_from,
+                          channel_table as _render_channel_table,
                           dm_peer, file_block, file_event_line,
                           file_history_table, fmt_age, message_block,
                           presence_rows, safe, term_width)
 from .client import AgoraClient
-from .models import Envelope, Status
+from .models import Envelope, Status, dm_channel_name
+from .vote import (DEFAULT_VOTE_TTL, VOTE_DATA_KEY, VOTE_RESULT_KEY,
+                   VoteChair, build_vote_post, parse_vote_arg,
+                   result_ballots, split_ttl, tally_ballots, vote_block,
+                   vote_info, watch_votes)
 
 
 def channel_table(channels: list[dict[str, Any]], unread: dict[str, int],
@@ -79,10 +85,17 @@ def flags_of(env: Envelope) -> str:
 
 # -- the app -------------------------------------------------------------------
 
+# Two Ctrl-C within this window = "really quit"; a single one only clears
+# the input line (the operator's reflex gesture must not tear the room down).
+CTRL_C_QUIT_WINDOW = 2.0
+
 HELP = """\
 plain text          post to the current channel (status=fyi, no obligation)
 /ask TEXT           post an open question (creates an obligation, escalates)
-/reply SEQ|ID TEXT  reply to a message (discharges its obligation)
+/reply REF TEXT     reply to a message (discharges its obligation, posts
+                    into the referenced message's channel)
+/reply REF:N TEXT   formally answer ask N of that message (727:1 or 727:1,2
+                    — the asks a block lists and the 'asks N/M' badge counts)
 /critical TEXT      operator broadcast: pins in every inbox until read
 /dm PEER TEXT       private 1:1 message
 /dms                your direct conversations (unread, recency)
@@ -93,10 +106,19 @@ plain text          post to the current channel (status=fyi, no obligation)
 /switch NAME (/c)   enter a room (auto-joins public rooms; also /join NAME TOKEN)
 /history [N] (/h)   last N messages of this room (default 15)
 /digest             open questions / decided / decisions of this room
+/vote TOPIC | A | B open a BLIND vote (ballots arrive as DMs to you, so no
+                    voter sees another's choice; add options with |).
+                    Auto-publishes on deadline (default 30m, lead with
+                    30m/2h/1d to override) or once every member has voted
+/tally REF [close]  the vote's state: chair-only counts while it runs;
+                    'close' publishes the full result early
 /members            who is in this room (with self-descriptions)
 /who                presence of everyone you share a channel with
-/read SEQ|ID        full body of one message (records a read receipt)
-/quit (/q)          leave the chat (membership persists)"""
+/read REF           full body of one message (records a read receipt)
+                    REF: SEQ or ID in this room; SEQ@CHANNEL from any room
+                    (seqs repeat across channels; @PEER works for DMs)
+/quit (/q)          leave the chat (membership persists)
+Ctrl-C              clear the input line (twice within 2s to quit)"""
 
 
 class ChatApp:
@@ -107,6 +129,11 @@ class ChatApp:
         self.current = channel
         self.style = Style(enabled=sys.stdout.isatty())
         self._closing = False
+        self._last_interrupt = float("-inf")  # monotonic time of the last Ctrl-C
+        # The chair side of blind votes opened from this client — the
+        # watcher publishes them when the deadline hits or everyone voted.
+        self.votes = VoteChair(self.client, self.me,
+                               lambda text: self._print(self.style.dim(text)))
 
     # -- output ---------------------------------------------------------------
 
@@ -129,9 +156,14 @@ class ChatApp:
             self._print(s.dim(f"  ∙ [{safe(env.channel)}] {text[:100]}"))
             return
         if env.critical:
+            # Criticals from other rooms render here too — hint the
+            # qualified ref, since a bare seq would resolve in the wrong
+            # channel (seqs are only unique per channel).
+            ref = env.seq if env.channel == self.current \
+                else f"{env.seq}@{env.channel}"
             self._print(s.red("═" * term_width()))
             self._print(s.red(f" CRITICAL from {env.sender} in {env.channel}"
-                              f" — pinned until you /read {env.seq}"))
+                              f" — pinned until you /read {ref}"))
         elif env.channel != self.current and not is_dm:
             head = safe(env.title or (env.body or "")[:70])
             self._print(s.dim(f"  · [{safe(env.channel)}] ") + s.sender(safe(env.sender))
@@ -142,14 +174,25 @@ class ChatApp:
             created_at=env.created_at, title=env.title, body=env.body,
             body_bytes=env.body_bytes, flags=flags_of(env),
             ask_progress=env.ask_progress, me=self.me, channel=env.channel,
-            show_channel=env.channel != self.current))
+            show_channel=env.channel != self.current,
+            # data (and so the ask texts) is inlined per delivery policy;
+            # pending_asks always travels, so state marks are exact here.
+            asks=asks_from(env.data), pending_asks=env.pending_asks))
 
-    def show_message_row(self, m: Any, *, max_lines: int | None = None) -> None:
-        kwargs = {} if max_lines is None else {"max_lines": max_lines}
+    def show_message_row(self, m: Any, *,
+                         max_lines: int | None = BODY_MAX_LINES,
+                         pending_asks: list[str] | None = None) -> None:
+        """One stored message. Default is the capped preview; max_lines=None
+        renders the full body (deliberate reads). Messages from outside the
+        current room (a qualified /read) self-locate via the qualified ref.
+        `pending_asks` marks ask state when the caller knows it (deliberate
+        reads fetch it); history rows render asks with neutral marks."""
         self._print(message_block(
             self.style, sender=m.sender, seq=m.seq, status=m.status.value,
             created_at=m.created_at, title=m.title, body=m.body,
-            me=self.me, channel=m.channel, **kwargs))
+            me=self.me, channel=m.channel, max_lines=max_lines,
+            show_channel=m.channel != self.current,
+            asks=asks_from(m.data), pending_asks=pending_asks))
 
     # -- data helpers -----------------------------------------------------------
 
@@ -178,12 +221,55 @@ class ChatApp:
             counts[env.channel] = counts.get(env.channel, 0) + 1
         return counts
 
-    async def _resolve_id(self, ref: str) -> str | None:
-        """Accept a message id (ULID) or a seq number in the current channel."""
-        if not ref.isdigit():
-            return ref
-        rows = await self.client.history(self.current, since=int(ref) - 1, limit=1)
-        return rows[0].id if rows and rows[0].seq == int(ref) else None
+    async def _target_channel(self, token: str) -> str | None:
+        """Resolve the '@' part of a qualified ref to a channel I belong to.
+        An exact channel name wins — hints print that form, and it can never
+        collide with peer sugar because plain channels may not start with the
+        reserved 'dm:' prefix. Otherwise try the token as a DM peer id
+        (typing sugar: '7@agency' for '7@dm:agency--laurent')."""
+        mine = {c["name"] for c in await self.client.list_channels()
+                if c["member"]}
+        if token in mine:
+            return token
+        dm = dm_channel_name(self.me, token)
+        return dm if dm in mine else None
+
+    async def _locate(self, ref: str) -> tuple[str, str, list[str]] | None:
+        """Resolve 'SEQ|ID[:ASK[,ASK...]][@CHANNEL|@PEER]' to
+        (channel, message_id, ask_ids), printing the reason when it cannot.
+
+        Seqs are per-channel, so blocks rendered away from their home room
+        hint the qualified form — accepting it here is what keeps those hints
+        honest. Parse order matters: split on the FIRST '@' (neither seqs,
+        ULIDs nor ask ids may contain one), THEN on the first ':' of the
+        local part only — channel names legitimately contain ':' (dm:a--b).
+        ':ASK' names the ask(s) a /reply answers, e.g. '727:1' or '727:1,2'
+        (unknown ids are rejected loudly by the hub, never mis-filed)."""
+        local, _, at = ref.partition("@")
+        local, _, ask_part = local.partition(":")
+        ask_ids = [a.strip() for a in ask_part.split(",") if a.strip()]
+        if not local:
+            self._print(f"missing SEQ or ID in '{ref}'")
+            return None
+        if at:
+            channel = await self._target_channel(at)
+            if channel is None:
+                self._print(f"unknown channel or DM peer '{at}' — "
+                            "/channels lists yours")
+                return None
+        elif self.current:
+            channel = self.current
+        else:
+            self._print("no current channel — use SEQ@CHANNEL, "
+                        "or /switch NAME first")
+            return None
+        if not local.isdigit():
+            return channel, local, ask_ids  # a ULID: already a unique id
+        rows = await self.client.history(channel, since=int(local) - 1, limit=1)
+        if rows and rows[0].seq == int(local):
+            return channel, rows[0].id, ask_ids
+        self._print(f"no message {local} in {channel}")
+        return None
 
     # -- commands ---------------------------------------------------------------
 
@@ -301,6 +387,151 @@ class ChatApp:
             detail = f"v{entry['version']} by {entry['updated_by']}"
             self._print(f"  {s.cyan('DECISION')} {safe(entry['key'])} {s.dim(safe(detail))}")
 
+    async def cmd_vote(self, arg: str) -> None:
+        """Open a BLIND vote: an ordinary open message + a machine-readable
+        option list in data + the ballot contract in the body. Ballots are
+        DMed to the author, never posted in the channel — a voter that sees
+        earlier ballots anchors on them, so secrecy until the close is what
+        keeps the poll informative. The result auto-publishes when the
+        deadline hits ('/vote 2h TOPIC | …' overrides the default) or when
+        every member has voted. Nothing hub-specific: any agent that can
+        read, reply and DM can vote with its existing tools."""
+        if not self.current:
+            self._print("no current channel — /switch NAME first")
+            return
+        ttl, rest = split_ttl(arg)
+        parsed = parse_vote_arg(rest)
+        if parsed is None:
+            self._print("usage: /vote [30m|2h|1d] TOPIC | OPTION | OPTION"
+                        " [| OPTION…]  (two or more distinct options)")
+            return
+        topic, options = parsed
+        ttl = ttl if ttl is not None else DEFAULT_VOTE_TTL
+        payload = build_vote_post(self.me, topic, options, ttl)
+        tag = payload["data"][VOTE_DATA_KEY]["tag"]
+        try:
+            msg = await self.client.post(
+                self.current, payload["body"], title=payload["title"],
+                status=Status.open, data=payload["data"])
+        except Exception as exc:
+            self._print(self.style.red(f"vote failed: {exc}"))
+            return
+        self.votes.register(msg, self.current)
+        self._print(self.style.dim(
+            f"(blind vote #{msg.seq} opened in {self.current} — ballots"
+            f" arrive as DMs tagged '{tag}'; auto-publishes in"
+            f" {fmt_age(ttl)} or when everyone voted; watch: /tally"
+            f" {msg.seq}; close early: /tally {msg.seq} close)"))
+
+    async def cmd_tally(self, arg: str) -> None:
+        """The vote's state, honoring ballot secrecy. Before the close only
+        the chair (the vote's author) sees counts — everyone else gets the
+        blind notice. Publication happens automatically when the vote is
+        finished (deadline reached, or every member voted — checked here
+        too, so a chair's /tally never shows a stale 'still open' state);
+        '/tally REF close' publishes early. From then on anyone's /tally
+        renders the result straight from the transcript, and each voter
+        can verify their listed ballot."""
+        ref, _, sub = arg.partition(" ")
+        close = sub.strip().lower() == "close"
+        if not ref:
+            self._print("usage: /tally SEQ|ID [close] — the vote message"
+                        " (SEQ@CHANNEL from another room)")
+            return
+        located = await self._locate(ref)
+        if located is None:
+            return
+        channel, mid, _ = located
+        try:
+            messages = await self.client.read(channel, mid)
+        except Exception as exc:
+            self._print(self.style.red(f"cannot read {ref}: {exc}"))
+            return
+        root = next((m for m in messages if m.id == mid), None)
+        info = vote_info(root, channel) if root else None
+        if info is None:
+            self._print(f"message {ref} is not a vote (no options payload)"
+                        f" — /read {ref} to see it")
+            return
+        options, topic = info["options"], info["topic"]
+        ref_disp = str(root.seq) if channel == self.current \
+            else f"{root.seq}@{channel}"
+        gathered = await self.votes.collect(info)
+        published, ballots = gathered["published"], gathered["ballots"]
+        public, members = gathered["public"], gathered["members"]
+
+        if published is not None:
+            payload = published.data[VOTE_RESULT_KEY]
+            shown = result_ballots(payload, options)
+            total = payload.get("total_members")
+            self._print(vote_block(
+                self.style, ref=ref_disp, topic=topic, options=options,
+                tally=tally_ballots(options, shown),
+                total_members=total if isinstance(total, int) else len(shown),
+                waiting=[], comments=[],
+                footer=f"closed by {root.sender} — published as"
+                       f" #{published.seq}"))
+            return
+
+        remaining = (info["closes_at"] - time.time()) \
+            if info["closes_at"] is not None else None
+
+        if self.me != root.sender:
+            if close:
+                self._print(f"only {root.sender} (the vote's author) can"
+                            f" close vote #{ref_disp}")
+                return
+            note = (" · public ballots so far (visible to all): "
+                    + ", ".join(sorted(public))) if public else ""
+            when = f" (closes in {fmt_age(remaining)})" \
+                if remaining is not None and remaining > 0 else ""
+            self._print(self.style.dim(
+                f"vote #{ref_disp} is blind: ballots go by DM to"
+                f" {root.sender}; the result appears here when it"
+                f" closes{when}{note}"))
+            return
+
+        # Chair view. If the vote is finished — or the chair asked — publish
+        # now; blindness only ever protected the voting window.
+        reason = "closed by the chair" if close \
+            else self.votes.due(info, ballots, members)
+        tally = tally_ballots(options, ballots)
+        notes = ["public ballot (visible to everyone): "
+                 + ", ".join(sorted(public))] if public else []
+        if reason is not None:
+            try:
+                posted = await self.votes.publish(info, ballots, members,
+                                                  reason)
+            except Exception as exc:
+                self._print(self.style.red(f"close failed: {exc}"))
+                return
+            self._print(self.style.dim(
+                f"(vote #{ref_disp} closed — {reason}; result published as"
+                f" #{posted.seq} in {channel})"))
+            waiting: list[str] = []
+            footer = f"closed — published as #{posted.seq}"
+        else:
+            presence: dict[str, str] = {}
+            with contextlib.suppress(Exception):
+                presence = {r["agent_id"]: r["state"]
+                            for r in self.client._json(
+                                await self.client._http.get("/presence"))}
+            # The vote's author is not nagged in `waiting` — they asked.
+            waiting = [m + (f" ({presence[m]})" if m in presence else "")
+                       for m in sorted(members)
+                       if m not in ballots and m != root.sender]
+            # remaining <= 0 is unreachable here (due() would have published);
+            # None = a vote posted without a deadline (pre-deadline clients).
+            left = f"closes in {fmt_age(remaining)}" \
+                if remaining is not None else "no deadline"
+            footer = (f"chair view (only you see this) — {left} ·"
+                      f" /tally {ref_disp} close publishes now")
+        self._print(vote_block(
+            self.style, ref=ref_disp, topic=topic, options=options,
+            tally=tally, total_members=len(members) or len(ballots),
+            waiting=waiting, comments=sorted(gathered["commenters"]),
+            notes=notes, footer=footer))
+
     async def cmd_who(self) -> None:
         rows = self.client._json(await self.client._http.get("/presence"))
         self._print(presence_rows(self.style, rows))
@@ -319,28 +550,82 @@ class ChatApp:
             self._print(f"  {s.sender(agent_id)}{pad}{role:<16} "
                         f"{s.dim(about[:80])}")
 
+    async def _pending_ask_ids(self, channel: str, target: Any) -> list[str] | None:
+        """Which of `target`'s asks are still unanswered, from the channel
+        digest — discharge is computed hub-side from the replies, which a
+        single message fetch cannot see. None = unknown (digest unavailable):
+        the renderer then shows neutral marks, it never guesses. A question
+        absent from the digest's open list has been discharged or resolved,
+        so 'absent' safely reads as 'nothing pending'."""
+        if not asks_from(target.data):
+            return None
+        try:
+            d = self.client._json(await self.client._http.get(
+                f"/channels/{channel}/digest"))
+        except Exception:
+            return None
+        for q in d.get("open_questions", []):
+            if q.get("seq") == target.seq:
+                return [str(a["id"]) for a in q.get("pending_asks", [])]
+        return []
+
     async def cmd_read(self, ref: str) -> None:
-        if not (self.current and ref):
-            self._print("usage: /read SEQ|MESSAGE_ID (in a current channel)")
+        """Deliberate read: the full body, uncapped — this is the command the
+        preview's '⋯ N more line(s)' hint points at, so it must never
+        re-truncate (field bug: it rendered the identical capped block).
+        Accepts the qualified ref cross-room hints print (SEQ@CHANNEL /
+        SEQ@PEER) — a bare seq only means something in the current room.
+        Any ':ASK' suffix is tolerated and ignored (reading is per message)."""
+        if not ref:
+            self._print("usage: /read SEQ|ID — or SEQ@CHANNEL from another room")
             return
-        mid = await self._resolve_id(ref)
-        if mid is None:
-            self._print(f"no message {ref} in {self.current}")
+        located = await self._locate(ref)
+        if located is None:
             return
-        for m in await self.client.read(self.current, mid):
-            self.show_message_row(m)
+        channel, mid, _ = located
+        try:
+            messages = await self.client.read(channel, mid)
+        except Exception as exc:
+            self._print(self.style.red(f"cannot read {ref}: {exc}"))
+            return
+        for m in messages:
+            pending = await self._pending_ask_ids(channel, m) \
+                if m.id == mid else None
+            self.show_message_row(m, max_lines=None, pending_asks=pending)
 
     async def cmd_reply(self, arg: str) -> None:
+        """The reply posts into the referenced message's channel — answering
+        a DM or a foreign-room critical must not require /switch-ing first
+        (and must never land in the wrong room: seqs repeat across channels).
+        'REF:N' (e.g. 727:1, or 727:1,2) formally answers those ask ids, the
+        thing the 'asks N/M' badge counts — a plain reply on an ask-carrying
+        message is visible but discharges nothing."""
         ref, _, text = arg.partition(" ")
-        if not (self.current and ref and text.strip()):
-            self._print("usage: /reply SEQ|MESSAGE_ID TEXT")
+        if not (ref and text.strip()):
+            self._print("usage: /reply SEQ|ID TEXT — REF:N answers ask N "
+                        "(727:1), SEQ@CHANNEL works from another room")
             return
-        mid = await self._resolve_id(ref)
-        if mid is None:
-            self._print(f"no message {ref} in {self.current}")
+        located = await self._locate(ref)
+        if located is None:
             return
-        await self.client.post(self.current, text.strip(), title=derive_title(text),
-                               status=Status.reply, reply_to=mid)
+        channel, mid, ask_ids = located
+        try:
+            await self.client.post(channel, text.strip(), title=derive_title(text),
+                                   status=Status.reply, reply_to=mid,
+                                   answers=ask_ids or None)
+        except Exception as exc:
+            self._print(self.style.red(f"reply failed: {exc}"))
+            return
+        # Confirm what was formally discharged and where it landed — a reply
+        # into another room produces no local echo, and an answered ask is
+        # otherwise only visible in the badge/digest.
+        note = ""
+        if ask_ids:
+            note = f" — answers ask [{', '.join(ask_ids)}]"
+        if channel != self.current:
+            self._print(self.style.dim(f"(reply sent to {channel}{note})"))
+        elif note:
+            self._print(self.style.dim(f"(reply sent{note})"))
 
     async def cmd_post(self, text: str, *, status: Status = Status.fyi,
                        critical: bool = False) -> None:
@@ -451,6 +736,8 @@ class ChatApp:
             "join": lambda: self.cmd_switch(arg),
             "history": lambda: self.cmd_history(arg), "h": lambda: self.cmd_history(arg),
             "digest": self.cmd_digest,
+            "vote": lambda: self.cmd_vote(arg),
+            "tally": lambda: self.cmd_tally(arg),
             "who": self.cmd_who,
             "members": self.cmd_members,
             "read": lambda: self.cmd_read(arg),
@@ -483,6 +770,13 @@ class ChatApp:
                 with contextlib.suppress(Exception):
                     await self.client.ack()
 
+    async def _vote_watch(self) -> None:
+        """Auto-publish chaired votes the moment their blindness protects
+        nothing anymore (deadline reached / everyone voted) — the same
+        chair-duty loop agents run in their MCP server / AgentRunner.
+        Recovery adopts votes this identity opened from any surface."""
+        await watch_votes(self.votes, closing=lambda: self._closing)
+
     # -- entry ---------------------------------------------------------------------
 
     async def run(self) -> None:
@@ -510,13 +804,15 @@ class ChatApp:
 
         await self.client.connect(memberships)
         pump = asyncio.create_task(self._pump())
+        vote_watch = asyncio.create_task(self._vote_watch())
         try:
             await self._input_loop()
         finally:
             self._closing = True
-            pump.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await pump
+            for task in (pump, vote_watch):
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
             await self.client.close()
             self._print(s.dim("left the chat (memberships persist)"))
 
@@ -527,13 +823,30 @@ class ChatApp:
         room_label = f"@{peer} (dm)" if peer else room
         return f"{s.sender(self.me)} {s.dim('@')} {s.cyan(room_label)} {s.dim('❯')} "
 
+    def _second_interrupt(self, now: float | None = None) -> bool:
+        """Ctrl-C quit policy: True when this interrupt follows another within
+        CTRL_C_QUIT_WINDOW seconds (pure logic, injectable clock for tests)."""
+        now = time.monotonic() if now is None else now
+        second = (now - self._last_interrupt) < CTRL_C_QUIT_WINDOW
+        self._last_interrupt = now
+        return second
+
     async def _input_loop(self) -> None:
         prompt_async = self._make_prompt()
         while True:
             try:
                 line = await prompt_async(self._prompt_text())
-            except (EOFError, KeyboardInterrupt):
-                return
+            except EOFError:
+                return  # Ctrl-D: deliberate, quits at once
+            except KeyboardInterrupt:
+                # Ctrl-C aborts the prompt, discarding whatever was typed.
+                # One press = just that (clear the line); a second within the
+                # window = quit. Mirrors the ipython/psql convention.
+                if self._second_interrupt():
+                    return
+                self._print(self.style.dim(
+                    "(line cleared — Ctrl-C again within 2s to quit, or /quit)"))
+                continue
             if line.strip() and not await self.dispatch(line):
                 return
 
@@ -558,7 +871,11 @@ class ChatApp:
 
         async def ask(prompt: str) -> str:
             # input() can't render ANSI reliably through readline; strip it.
-            import re
+            # Note: on this path Ctrl-C arrives as SIGINT to the event loop
+            # (not as a KeyboardInterrupt from this await), so it still quits
+            # immediately via run_chat's suppress — the clear-line-then-quit
+            # gesture needs the prompt_toolkit path (raw mode reads Ctrl-C
+            # as a key and aborts only the prompt).
             plain = re.sub(r"\x1b\[[0-9;]*m", "", prompt)
             return await asyncio.to_thread(input, plain)
         return ask

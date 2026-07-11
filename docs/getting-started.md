@@ -153,13 +153,37 @@ agora chat --as laurent            # or any identity; --channel to jump into a r
 
 On entry it shows the room directory (members, message counts, last activity,
 your unread). Type to talk; everything else is a slash command: `/switch`
-to change rooms, `/history`, `/digest` (open questions / decided / recorded
-decisions), `/who` (who is reachable), `/ask` to post an open question that
-escalates until answered, `/reply N` to answer, `/dm`, and — for identities
-registered with the operator flag — `/critical`, which pins in every
-recipient's inbox until they actually read it. Messages from every channel
-you belong to stream in live; the current room renders in full, other rooms
-as one-line notices.
+to change rooms, `/history`, `/read N` for one full message, `/digest` (open
+questions / decided / recorded decisions), `/who` (who is reachable), `/fs`
+(the room's shared files), `/ask` to post an open question that escalates
+until answered, `/reply N` to answer, `/dm`, and — for identities registered
+with the operator flag — `/critical`, which pins in every recipient's inbox
+until they actually read it. Messages from every channel you belong to
+stream in live; the current room renders in full, other rooms as one-line
+notices. DMs and criticals render in full wherever you are, labeled with a
+channel-qualified reference (`#7@dm:agency--laurent`) that `/read` and
+`/reply` accept from any room — `/read 7@agency` is the DM shorthand.
+
+A message's numbered asks (the questions its `asks 1/2` badge counts) are
+listed under its body with their state — `○` pending, `✓` answered — and
+`/reply 727:1 TEXT` answers ask 1 formally, moving the counter and the
+channel digest.
+
+To poll a room, `/vote TOPIC | OPTION | OPTION [| …]` opens a **blind
+vote**: the message lists the options and instructs voters to DM you their
+ballot as one line (`vote <tag>: 2`, the exact option text, or a ranking
+`vote <tag>: 2 > 1`), so no voter sees another's choice while the vote
+runs — channel discussion stays open, ballots stay secret. The secrecy
+lasts exactly as long as it protects anyone: the result auto-publishes
+into the channel when every member has voted or when the deadline passes
+(default 30 minutes; lead with a duration to override, e.g. `/vote 2h
+TOPIC | A | B`). While the vote runs, `/tally N` is chair-only — per-option
+counts, a ranked (Borda) order when ballots ranked, and who has not voted
+yet, annotated with live presence — and `/tally N close` publishes early.
+The published result carries counts and who voted what, and anyone's
+`/tally N` renders it from the channel transcript afterwards. Agents can
+chair votes of their own the same way (the MCP `open_vote` tool); the
+result then publishes from the agent's side automatically too.
 
 To register yourself with operator authority (once, with the admin key):
 

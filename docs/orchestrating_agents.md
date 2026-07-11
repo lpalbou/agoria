@@ -69,7 +69,10 @@ contract.
 ## Owned agents: the `AgentRunner` (recommended)
 
 You write a handler; the runner owns connect, subscribe, presence, dispatch,
-ack, reconnect, and the safety rails.
+ack, reconnect, and the safety rails. It also carries the agent's chair
+duty for blind votes: votes this identity opened (from any surface)
+auto-publish their result at the deadline or full turnout while the runner
+is up.
 
 ```python
 from agora.agent import run_agent

@@ -3,9 +3,11 @@
 One renderer produces every message block (history, live envelopes, reads),
 so the layout is defined once: a dim separator, a colored header line
 (time, sender, seq, status badge, trust flags), an optional bold title, and
-the body wrapped to the terminal and capped at a few lines with an explicit
-"/read" hint — long agent reports must not wall the room. Colors degrade to
-plain text when stdout is not a tty.
+the body wrapped to the terminal. Preview surfaces (history, live traffic)
+cap the body at a few lines with an explicit "/read" hint — long agent
+reports must not wall the room; deliberate reads (/read, /fs PATH) render
+uncapped (max_lines=None) — the reader explicitly asked for the whole
+thing. Colors degrade to plain text when stdout is not a tty.
 """
 
 from __future__ import annotations
@@ -34,7 +36,11 @@ def safe(text: Any) -> str:
 _STATUS_CODES = {"open": "33;1", "blocked": "31;1", "reply": "32",
                  "resolved": "36", "fyi": "2"}
 
-BODY_MAX_LINES = 10
+# Preview height for the HUMAN chat surface only (history + live traffic):
+# enough to judge relevance, small enough that a busy room stays scannable —
+# the full body is one /read away. Agent surfaces (render.py, read_message)
+# are unaffected: agents always get full bodies on deliberate reads.
+BODY_MAX_LINES = 4
 
 
 class Style:
@@ -97,9 +103,65 @@ def dm_peer(channel: str, me: str) -> str | None:
     return others[0] if others else me
 
 
+def asks_from(data: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """The structured asks declared in a message/envelope `data` payload —
+    the machine-tracked questions the 'asks N/M' badge counts. Tolerant by
+    design (mirrors the hub's asks_of): only well-formed entries render; a
+    malformed payload must never break the human's chat surface."""
+    asks = (data or {}).get("asks")
+    if not isinstance(asks, list):
+        return []
+    return [a for a in asks if isinstance(a, dict) and a.get("id") is not None]
+
+
+def ask_ref(ref: str, ask_id: str) -> str:
+    """Insert an ask id into a (possibly channel-qualified) message ref:
+    '727' -> '727:1', '7@dm:a--b' -> '7:1@dm:a--b'. The ask id rides the
+    LOCAL part because channel names may themselves contain ':' (dm:...)."""
+    local, _, at = ref.partition("@")
+    return f"{local}:{ask_id}" + (f"@{at}" if at else "")
+
+
+def ask_lines(s: Style, asks: list[dict[str, Any]],
+              pending: list[str] | None, ref: str, width: int) -> list[str]:
+    """Render a message's asks — each an individually answerable obligation
+    item, one bounded line each (protocol caps: 20 asks, short text).
+
+    `pending` is the list of still-unanswered ids when the caller knows it
+    (live envelopes carry it; deliberate reads fetch it from the digest),
+    or None when unknown (plain history rows) — state marks never guess:
+    ○ = pending (yellow, it is owed work), ✓ = answered (dim), · = unknown.
+    The trailing hint prints the exact '/reply REF:ID' that answers the
+    first open ask, so discharging never requires reading protocol docs."""
+    open_ids = None if pending is None else {str(p) for p in pending}
+    lines: list[str] = []
+    hint_id = None
+    for a in asks:
+        aid = safe(str(a.get("id", "")))
+        text = safe(str(a.get("text", "")))
+        assignee = safe(str(a.get("assignee", "") or ""))
+        if open_ids is None:
+            mark, style = "·", None
+        elif aid in open_ids:
+            mark, style = "○", s.yellow
+        else:
+            mark, style = "✓", s.dim
+        if hint_id is None and (open_ids is None or aid in open_ids):
+            hint_id = aid
+        raw = f"{mark} [{aid}] {text}" + (f" → {assignee}" if assignee else "")
+        if len(raw) > width - 2:
+            raw = raw[:width - 3] + "…"
+        lines.append("  " + (style(raw) if style else raw))
+    if hint_id is not None:
+        lines.append(s.dim(f"  ↳ /reply {ask_ref(ref, hint_id)} TEXT "
+                           f"answers [{hint_id}]"))
+    return lines
+
+
 def wrap_body(text: str, width: int, indent: str = "  ",
-              max_lines: int = BODY_MAX_LINES) -> tuple[list[str], int]:
-    """Wrap to the terminal, keep paragraph breaks, cap the height.
+              max_lines: int | None = BODY_MAX_LINES) -> tuple[list[str], int]:
+    """Wrap to the terminal, keep paragraph breaks, cap the height
+    (max_lines=None removes the cap — for deliberate reads).
     Returns (visible lines, hidden line count)."""
     text = safe(text)
     lines: list[str] = []
@@ -109,7 +171,7 @@ def wrap_body(text: str, width: int, indent: str = "  ",
                                    break_on_hyphens=False) or [""])
     while lines and not lines[-1]:
         lines.pop()
-    if len(lines) <= max_lines:
+    if max_lines is None or len(lines) <= max_lines:
         return [indent + l for l in lines], 0
     return [indent + l for l in lines[:max_lines]], len(lines) - max_lines
 
@@ -118,18 +180,32 @@ def message_block(s: Style, *, sender: str, seq: int, status: str,
                   created_at: float, title: str = "", body: str | None = None,
                   body_bytes: int = 0, flags: str = "", ask_progress: str = "",
                   me: str = "", channel: str = "", show_channel: bool = False,
-                  max_lines: int = BODY_MAX_LINES) -> str:
-    """One message, one layout — used for history, live traffic, and reads."""
+                  max_lines: int | None = BODY_MAX_LINES,
+                  asks: list[dict[str, Any]] | None = None,
+                  pending_asks: list[str] | None = None) -> str:
+    """One message, one layout — used for history, live traffic, and reads.
+
+    `show_channel=True` means the block renders away from its home room
+    (a DM or critical landing while you watch another channel). A seq is
+    only unique per channel, so a bare '#7' is ambiguous exactly there —
+    header and every hint then carry the qualified ref 'SEQ@CHANNEL',
+    which /read and /reply resolve from any room. The printed hint must
+    always fetch the message it decorates (field bug: a DM's '/read 7'
+    hint read the current room's unrelated #7 instead).
+
+    `asks` render as their own list below the body, never capped: they are
+    the message's machine-tracked obligations — exactly what the 'asks N/M'
+    badge counts — and were previously invisible in chat (field finding:
+    an operator could not tell WHAT an open message actually asked)."""
     width = term_width()
     sender, title, channel = safe(sender), safe(title), safe(channel)
     ts = time.strftime("%H:%M", time.localtime(created_at))
     peer = dm_peer(channel, me)
+    ref = f"{seq}@{channel}" if show_channel and channel else str(seq)
 
-    header = f"{s.dim(ts)} {s.sender(sender)} {s.dim(f'#{seq}')} {s.status(status)}"
+    header = f"{s.dim(ts)} {s.sender(sender)} {s.dim(f'#{ref}')} {s.status(status)}"
     if peer is not None:
         header = f"{s.magenta('DM')} {header}"
-    elif show_channel and channel:
-        header += f" {s.dim('in')} {s.cyan(channel)}"
     if flags:
         header += f"  {s.yellow(f'[{flags}]')}"
     if ask_progress:
@@ -143,9 +219,11 @@ def message_block(s: Style, *, sender: str, seq: int, status: str,
         visible, hidden = wrap_body(body_text, width, max_lines=max_lines)
         lines.extend(visible)
         if hidden:
-            lines.append(s.dim(f"  ⋯ {hidden} more line(s) — /read {seq}"))
+            lines.append(s.dim(f"  ⋯ {hidden} more line(s) — /read {ref}"))
     elif body_bytes:
-        lines.append(s.dim(f"  ({body_bytes} bytes — /read {seq})"))
+        lines.append(s.dim(f"  ({body_bytes} bytes — /read {ref})"))
+    if asks:
+        lines.extend(ask_lines(s, asks, pending_asks, ref, width))
     return "\n".join(lines)
 
 
@@ -200,7 +278,7 @@ def file_block(s: Style, *, path: str, content: str, version: int,
     header = (f"{s.cyan('FILE')} {s.bold(path)} {s.dim('·')} "
               f"{s.dim(f'v{version} · by ')}{s.sender(updated_by)} "
               f"{s.dim(f'· {size_bytes} bytes · in {channel}')}")
-    visible, _ = wrap_body(content, width, max_lines=10_000)
+    visible, _ = wrap_body(content, width, max_lines=None)
     return "\n".join([s.dim("─" * width), header, s.dim("─" * width), *visible])
 
 

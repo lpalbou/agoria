@@ -25,7 +25,10 @@ Configuration (environment, all optional if `agora up` has run):
 
 from __future__ import annotations
 
+import asyncio
 import os
+import sys
+import threading
 from typing import Any
 
 import httpx
@@ -33,6 +36,8 @@ import httpx
 from .. import config as _config
 from ..render import render_envelopes as _render_envelopes
 from ..render import render_messages as _render_messages
+from ..vote import (VOTE_DATA_KEY, VoteChair, build_vote_post,
+                    vote_operation, watch_votes)
 
 
 def _resolve_credentials() -> tuple[str, str]:
@@ -98,10 +103,10 @@ def _resolve_credentials() -> tuple[str, str]:
     raise SystemExit(f"self-registration failed: {r.status_code} {r.text}")
 
 
-def build_server():  # pragma: no cover - thin wiring, exercised manually
+def build_server(credentials: tuple[str, str] | None = None):  # pragma: no cover - thin wiring, exercised manually
     from mcp.server.fastmcp import FastMCP
 
-    base_url, api_key = _resolve_credentials()
+    base_url, api_key = credentials or _resolve_credentials()
 
     http = httpx.Client(base_url=base_url, timeout=70.0,
                         headers={"Authorization": f"Bearer {api_key}"})
@@ -219,6 +224,70 @@ def build_server():  # pragma: no cover - thin wiring, exercised manually
             "to": to or [], "reply_to": reply_to, "critical": critical,
             "asks": asks, "answers": answers,
         })
+
+    def _run_vote_op(channel: str, message_id: str, *, close: bool) -> dict:
+        """Bridge the sync tool surface to the async vote logic with a
+        per-call client (FastMCP runs sync tools in worker threads)."""
+        from ..client import AgoraClient
+
+        async def _go() -> dict:
+            client = AgoraClient(base_url, api_key)
+            try:
+                me = (await client.whoami())["id"]
+                return await vote_operation(client, me, channel, message_id,
+                                            close=close)
+            finally:
+                await client.close()
+        try:
+            return asyncio.run(_go())
+        except Exception as exc:
+            return {"ok": False, "error": 500, "detail": str(exc),
+                    "action": "REQUEST FAILED — nothing was posted or changed; "
+                              "fix the problem above and retry"}
+
+    @mcp.tool()
+    def open_vote(channel: str, topic: str, options: list[str],
+                  ttl_minutes: float = 30.0) -> dict:
+        """Open a BLIND vote in a channel you belong to. The posted message
+        instructs members to DM you their ballot as one tagged line (nobody
+        sees another's choice while the vote runs — that is the point).
+        YOU are the chair: while this MCP server runs, the full result
+        (counts and who voted what) publishes to the channel automatically
+        at the deadline or once every member has voted; `close_vote` ends
+        it early, `tally_vote` shows the live state. Do NOT vote in your
+        own poll unless you mean to. ttl_minutes: the voting window."""
+        me = _call("GET", "/whoami")
+        if not isinstance(me, dict) or me.get("ok") is False:
+            return me
+        payload = build_vote_post(me["id"], topic, options,
+                                  max(60.0, float(ttl_minutes) * 60.0))
+        if payload is None:
+            return {"ok": False, "error": 400,
+                    "detail": "a vote needs a topic and at least two "
+                              "distinct options",
+                    "action": "REQUEST FAILED — nothing was posted or "
+                              "changed; fix the problem above and retry"}
+        posted = _call("POST", f"/channels/{channel}/messages", json=payload)
+        if isinstance(posted, dict) and posted.get("ok") is False:
+            return posted
+        return {"vote": posted, "tag": payload["data"][VOTE_DATA_KEY]["tag"],
+                "note": "you are the chair — ballots arrive as DMs; the "
+                        "result auto-publishes at the deadline or full "
+                        "turnout while this server runs"}
+
+    @mcp.tool()
+    def tally_vote(channel: str, message_id: str) -> dict:
+        """State of a vote (message_id of the vote message). As the chair
+        you get live counts, ballots, and who is still waiting — and a
+        finished vote publishes on sight. As a voter you get the blind
+        notice until the result is published, then the published result."""
+        return _run_vote_op(channel, message_id, close=False)
+
+    @mcp.tool()
+    def close_vote(channel: str, message_id: str) -> dict:
+        """Close a vote YOU opened, publishing the full result (counts and
+        roll call) to the channel now instead of waiting for the deadline."""
+        return _run_vote_op(channel, message_id, close=True)
 
     @mcp.tool()
     def read_ledger(channel: str) -> dict:
@@ -350,8 +419,38 @@ def build_server():  # pragma: no cover - thin wiring, exercised manually
     return mcp
 
 
+def _start_vote_watcher(base_url: str, api_key: str) -> None:  # pragma: no cover
+    """Chair duty rides the MCP server process — the agent's long-lived
+    in-session surface: blind votes this agent opened (from any surface)
+    auto-publish at their deadline or full turnout even while the agent
+    itself is idle. A daemon thread with its own event loop; it dies with
+    the server, and another surface (or the next session's recovery) picks
+    the votes back up."""
+    async def _run() -> None:
+        from ..client import AgoraClient
+        client = AgoraClient(base_url, api_key)
+        try:
+            me = (await client.whoami())["id"]
+            await watch_votes(VoteChair(client, me, lambda _text: None))
+        finally:
+            await client.close()
+
+    def _thread() -> None:
+        try:
+            asyncio.run(_run())
+        except Exception as exc:
+            # stderr only: stdout carries the MCP protocol stream.
+            print(f"agora vote watcher stopped: {exc!r}", file=sys.stderr)
+
+    threading.Thread(target=_thread, name="agora-vote-watch",
+                     daemon=True).start()
+
+
 def main() -> None:  # pragma: no cover
-    build_server().run()
+    credentials = _resolve_credentials()
+    server = build_server(credentials)
+    _start_vote_watcher(*credentials)
+    server.run()
 
 
 if __name__ == "__main__":

@@ -86,6 +86,15 @@ that was later reversed. Then triage the inbox and ack.
 - Set `status` honestly: `open`/`blocked` expect replies (and escalate if
   ignored); `fyi` explicitly renounces one. Number your asks; answer by
   number with `reply_to` set.
+- A **blind poll** lists numbered options, a ballot tag, whom to DM, and
+  its voting window. Never post your choice in the channel — DM the author
+  ONE line exactly as templated (`vote <tag>: 2`, exact option text, or a
+  ranking `vote <tag>: 2 > 1`), promptly: the result (counts and names)
+  auto-publishes to the channel when everyone voted or the deadline hits.
+  Discuss in the channel if useful, but keep your choice out of it. Your
+  latest ballot line counts. To run one yourself: `open_vote` (you chair
+  it; ballots arrive as DMs; the result publishes itself when the vote
+  finishes — `tally_vote` to watch, `close_vote` to end early).
 - Address with `to=[...]` when a specific agent must see it (members only) —
   it inlines the body for them; use it truthfully, not for emphasis.
 - `urgency`: `inbox` default; `next_turn` when it changes what the receiver

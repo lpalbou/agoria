@@ -117,11 +117,34 @@ def test_message_block_marks_dms_and_foreign_channels():
                        created_at=time.time(), body="hi",
                        me="laurent", channel="dm:laurent--runtime")
     assert dm.splitlines()[1].startswith("DM ")
+    assert "#3 " in dm                  # home room: the bare seq suffices
     other = message_block(s, sender="memory", seq=9, status="reply",
                           created_at=time.time(), body="x",
                           me="laurent", channel="entity-society",
                           show_channel=True)
-    assert "in entity-society" in other
+    assert "#9@entity-society" in other  # self-locating, /read-able as printed
+
+
+def test_message_block_qualifies_refs_outside_their_room():
+    """Field bug: seqs are per-channel, but a DM arriving while you watch
+    another room rendered '⋯ N more — /read 7' — and /read 7 fetched the
+    CURRENT room's unrelated #7. Every hint on a block rendered away from
+    its home channel must print a ref that resolves to that very message."""
+    from agora.chat_render import Style, message_block
+    s = Style(False)
+    body = "\n".join(f"line {i}" for i in range(12))
+    dm = message_block(s, sender="agency", seq=7, status="fyi",
+                       created_at=time.time(), body=body,
+                       me="laurent", channel="dm:agency--laurent",
+                       show_channel=True)
+    assert "#7@dm:agency--laurent" in dm
+    assert "/read 7@dm:agency--laurent" in dm.splitlines()[-1]
+    # The body_bytes hint (body not inlined) must qualify identically.
+    stub = message_block(s, sender="agency", seq=7, status="fyi",
+                         created_at=time.time(), body_bytes=2048,
+                         me="laurent", channel="dm:agency--laurent",
+                         show_channel=True)
+    assert "/read 7@dm:agency--laurent" in stub
 
 
 def test_file_event_line_shows_edit_size():
@@ -152,6 +175,48 @@ def test_file_history_table_shows_created_then_deltas():
     assert "+189B" in lines[2] and "observer" in lines[2]
 
 
+def test_ask_lines_render_state_marks_and_reply_hint():
+    """Asks are the machine-tracked questions the 'asks N/M' badge counts —
+    previously invisible in chat (field finding: the operator could not tell
+    WHAT #727 actually asked). ○ = pending, ✓ = answered, · = state unknown;
+    the hint prints the exact /reply REF:ID that answers the first open ask."""
+    from agora.chat_render import Style, ask_lines
+    s = Style(False)
+    asks = [{"id": "1", "text": "publish the contract types"},
+            {"id": "2", "text": "fold all-cleared to ABSENT", "assignee": "gateway"}]
+    known = ask_lines(s, asks, ["2"], "727", 100)
+    assert known[0].startswith("  ✓ [1]")
+    assert known[1].startswith("  ○ [2]") and "→ gateway" in known[1]
+    assert "/reply 727:2 TEXT" in known[-1]          # first PENDING ask, not #1
+    unknown = ask_lines(s, asks, None, "7@dm:agency--laurent", 100)
+    assert unknown[0].startswith("  · [1]")
+    # The ask id rides the LOCAL part of a qualified ref (channels contain ':').
+    assert "/reply 7:1@dm:agency--laurent TEXT" in unknown[-1]
+    done = ask_lines(s, asks, [], "727", 100)
+    assert all("✓" in line for line in done)
+    assert not any("/reply" in line for line in done)  # nothing left to answer
+
+
+def test_asks_from_is_tolerant_of_malformed_payloads():
+    from agora.chat_render import asks_from
+    assert asks_from(None) == []
+    assert asks_from({"asks": "not-a-list"}) == []
+    assert asks_from({"asks": [{"no_id": True}, "junk", {"id": "1", "text": "t"}]}) \
+        == [{"id": "1", "text": "t"}]
+
+
+def test_message_block_lists_asks_below_the_body():
+    from agora.chat_render import Style, message_block
+    block = message_block(Style(False), sender="uic", seq=727, status="open",
+                          created_at=time.time(), title="TASK COMPLETE",
+                          body="prose that buries the questions",
+                          asks=[{"id": "1", "text": "the contract"},
+                                {"id": "2", "text": "fold to ABSENT"}],
+                          pending_asks=["1", "2"])
+    assert "○ [1] the contract" in block and "○ [2] fold to ABSENT" in block
+    assert "/reply 727:1 TEXT" in block
+
+
 def test_wrap_body_preserves_paragraphs_and_counts_hidden():
     from agora.chat_render import wrap_body
     visible, hidden = wrap_body("a\n\nb", width=80, max_lines=10)
@@ -159,6 +224,285 @@ def test_wrap_body_preserves_paragraphs_and_counts_hidden():
     visible, hidden = wrap_body("\n".join(str(i) for i in range(30)),
                                 width=80, max_lines=10)
     assert len(visible) == 10 and hidden == 20
+
+
+def test_wrap_body_uncapped_with_max_lines_none():
+    from agora.chat_render import wrap_body
+    visible, hidden = wrap_body("\n".join(str(i) for i in range(30)),
+                                width=80, max_lines=None)
+    assert len(visible) == 30 and hidden == 0
+
+
+def test_read_command_renders_the_full_body():
+    """Field bug: /read rendered through the same capped preview layout as
+    live traffic, so 'show me the whole message' printed the identical
+    truncated block — ending in a '/read SEQ' hint pointing at itself.
+    A deliberate read must show every line and carry no truncation hint."""
+    import asyncio
+
+    from agora.chat import ChatApp
+    from agora.models import Message
+
+    app = ChatApp("http://127.0.0.1:1", "k", "tester")
+    app.current = "commons"
+    body = "\n".join(f"line {i}" for i in range(40))
+    msg = Message(id="01HREADFULL", channel="commons", seq=662,
+                  sender="agent", title="big report", body=body)
+
+    async def fake_read(channel, mid):
+        assert (channel, mid) == ("commons", "01HREADFULL")
+        return [msg]
+    app.client.read = fake_read
+    out: list[str] = []
+    app._print = lambda text="": out.append(text)
+
+    asyncio.run(app.cmd_read("01HREADFULL"))
+    text = "\n".join(out)
+    assert "line 0" in text and "line 39" in text   # every line, first to last
+    assert "more line" not in text                  # no self-referential hint
+
+
+# -- qualified refs: seqs are per-channel, hints must resolve from any room -------
+
+def _qualified_ref_app():
+    """A ChatApp in 'commons' with a stubbed client: one DM channel whose
+    seq 7 exists, and a fake read/post that records the channel actually hit."""
+    from agora.chat import ChatApp
+    from agora.models import Message
+
+    app = ChatApp("http://127.0.0.1:1", "k", "laurent")
+    app.current = "commons"
+    dm_chan = "dm:agency--laurent"
+    msg = Message(id="01HDMSEQ7", channel=dm_chan, seq=7,
+                  sender="agency", title="status", body="the long report")
+
+    async def list_channels():
+        return [{"name": "commons", "member": True},
+                {"name": dm_chan, "member": True},
+                {"name": "spectator", "member": False}]
+
+    async def history(channel, since=0, limit=200):
+        # The regression this guards: 'commons' also HAS a seq 7 — a
+        # qualified ref must never touch the current room.
+        assert channel == dm_chan, f"resolved in the wrong channel: {channel}"
+        assert (since, limit) == (6, 1)
+        return [msg]
+
+    calls = {"read": [], "post": []}
+
+    async def read(channel, mid):
+        calls["read"].append((channel, mid))
+        return [msg]
+
+    async def post(channel, body, **kw):
+        calls["post"].append((channel, kw.get("reply_to"), body))
+        return msg
+
+    app.client.list_channels = list_channels
+    app.client.history = history
+    app.client.read = read
+    app.client.post = post
+    out: list[str] = []
+    app._print = lambda text="": out.append(text)
+    return app, calls, out
+
+
+def test_read_accepts_qualified_refs_and_peer_sugar():
+    """'/read 7@dm:agency--laurent' (the printed hint) and '/read 7@agency'
+    (peer sugar) both read seq 7 OF THE DM CHANNEL — not the current room's
+    #7, which is what the bare '/read 7' hint used to fetch (field bug)."""
+    import asyncio
+
+    app, calls, out = _qualified_ref_app()
+    asyncio.run(app.cmd_read("7@dm:agency--laurent"))
+    asyncio.run(app.cmd_read("7@agency"))
+    assert calls["read"] == [("dm:agency--laurent", "01HDMSEQ7")] * 2
+    # The rendered block self-locates: its header carries the qualified ref.
+    assert any("#7@dm:agency--laurent" in line for line in out)
+
+
+def test_reply_qualified_ref_posts_into_that_channel():
+    """A reply through a qualified ref must land in the referenced message's
+    channel (a bare-seq reply into the wrong room is the worst variant of
+    the ambiguity: it posts content somewhere the sender never intended)."""
+    import asyncio
+
+    app, calls, out = _qualified_ref_app()
+    asyncio.run(app.cmd_reply("7@agency on it — deploying now"))
+    assert calls["post"] == [("dm:agency--laurent", "01HDMSEQ7",
+                              "on it — deploying now")]
+    assert any("reply sent to dm:agency--laurent" in line for line in out)
+
+
+def test_locate_rejects_unknown_targets_and_missing_room():
+    """Bad '@' targets name the problem; a bare seq with no current room
+    points at the qualified form instead of failing silently."""
+    import asyncio
+
+    app, calls, out = _qualified_ref_app()
+    asyncio.run(app.cmd_read("7@nowhere"))
+    assert calls["read"] == [] and any("unknown channel" in l for l in out)
+    app.current = None
+    out.clear()
+    asyncio.run(app.cmd_read("7"))
+    assert calls["read"] == [] and any("no current channel" in l for l in out)
+
+
+def test_reply_ask_syntax_attaches_answers():
+    """'/reply 727:1 TEXT' formally answers ask 1 (the badge counter moves);
+    '727:1,2' answers both. A plain '/reply 727 TEXT' keeps answers off —
+    same visible reply, no discharge (that asymmetry was invisible before)."""
+    import asyncio
+
+    from agora.chat import ChatApp
+    from agora.models import Message
+
+    app = ChatApp("http://127.0.0.1:1", "k", "laurent")
+    app.current = "commons"
+    msg = Message(id="01HASK727", channel="commons", seq=727, sender="uic",
+                  title="TASK COMPLETE", body="…",
+                  data={"asks": [{"id": "1", "text": "a"}, {"id": "2", "text": "b"}]})
+
+    async def history(channel, since=0, limit=200):
+        assert channel == "commons"
+        return [msg]
+
+    posts = []
+
+    async def post(channel, body, **kw):
+        posts.append((channel, kw.get("reply_to"), kw.get("answers")))
+        return msg
+
+    app.client.history = history
+    app.client.post = post
+    out: list[str] = []
+    app._print = lambda text="": out.append(text)
+
+    asyncio.run(app.cmd_reply("727:1 the contract is in ui-kit/src"))
+    asyncio.run(app.cmd_reply("727:1,2 both folded"))
+    asyncio.run(app.cmd_reply("727 just a comment"))
+    assert posts == [("commons", "01HASK727", ["1"]),
+                     ("commons", "01HASK727", ["1", "2"]),
+                     ("commons", "01HASK727", None)]
+    assert any("answers ask [1]" in line for line in out)
+    assert any("answers ask [1, 2]" in line for line in out)
+
+
+def test_read_marks_ask_state_from_digest_and_tolerates_ask_suffix():
+    """A deliberate read fetches the digest to mark which asks are still
+    pending (discharge lives hub-side, in the replies); a question absent
+    from the open list reads as fully answered. '/read 727:1' reads 727."""
+    import asyncio
+
+    from agora.chat import ChatApp
+    from agora.models import Message
+
+    app = ChatApp("http://127.0.0.1:1", "k", "laurent")
+    app.current = "commons"
+    msg = Message(id="01HASK727", channel="commons", seq=727, sender="uic",
+                  title="TASK COMPLETE", body="…",
+                  data={"asks": [{"id": "1", "text": "a"}, {"id": "2", "text": "b"}]})
+
+    async def history(channel, since=0, limit=200):
+        return [msg]
+
+    async def read(channel, mid):
+        assert (channel, mid) == ("commons", "01HASK727")
+        return [msg]
+
+    digest = {"open_questions": [
+        {"seq": 727, "pending_asks": [{"id": "2", "text": "b"}]}]}
+
+    class FakeHTTP:
+        async def get(self, path):
+            assert path == "/channels/commons/digest"
+            return digest
+
+    app.client.history = history
+    app.client.read = read
+    app.client._http = FakeHTTP()
+    app.client._json = lambda resp: resp
+    out: list[str] = []
+    app._print = lambda text="": out.append(text)
+
+    asyncio.run(app.cmd_read("727:1"))          # ask suffix tolerated
+    text = "\n".join(out)
+    assert "✓ [1]" in text and "○ [2]" in text  # 1 answered, 2 still owed
+    out.clear()
+    digest["open_questions"] = []               # discharged: left the open list
+    asyncio.run(app.cmd_read("727"))
+    text = "\n".join(out)
+    assert "✓ [1]" in text and "✓ [2]" in text and "○" not in text
+
+
+def test_critical_banner_hints_qualified_ref_from_other_rooms():
+    """A critical pins until /read — from another room the banner must hint
+    the ref that actually un-pins it, not the current room's same-numbered
+    message."""
+    import time as _time
+
+    from agora.chat import ChatApp
+    from agora.chat_render import Style
+    from agora.models import Envelope, Kind, Status, Urgency
+
+    app = ChatApp("http://127.0.0.1:1", "k", "laurent")
+    app.current = "commons"
+    app.style = Style(False)
+    out: list[str] = []
+    app._print = lambda text="": out.append(text)
+    env = Envelope(id="01HCRIT", channel="ops", seq=3, sender="boss",
+                   kind=Kind.message, status=Status.fyi,
+                   urgency=Urgency.interrupt, effective_urgency=Urgency.interrupt,
+                   critical=True, title="halt", body="stop the rollout",
+                   body_bytes=16, created_at=_time.time())
+    app.show_envelope(env)
+    text = "\n".join(out)
+    assert "/read 3@ops" in text
+    # Same critical in its home room keeps the bare seq.
+    app.current = "ops"
+    out.clear()
+    app.show_envelope(env)
+    assert "/read 3" in "\n".join(out) and "3@ops" not in "\n".join(out)
+
+
+# -- Ctrl-C policy: one clears the line, two in a row quit ------------------------
+
+def test_second_interrupt_window_logic():
+    """Pure policy check with an injected clock: only a Ctrl-C following
+    another within CTRL_C_QUIT_WINDOW counts as 'really quit'."""
+    from agora.chat import CTRL_C_QUIT_WINDOW, ChatApp
+
+    app = ChatApp("http://127.0.0.1:1", "k", "tester")
+    assert not app._second_interrupt(now=100.0)              # first ever
+    assert app._second_interrupt(now=100.0 + CTRL_C_QUIT_WINDOW - 0.1)
+    app2 = ChatApp("http://127.0.0.1:1", "k", "tester")
+    assert not app2._second_interrupt(now=100.0)
+    assert not app2._second_interrupt(now=100.0 + CTRL_C_QUIT_WINDOW + 0.1)
+
+
+def test_input_loop_clears_on_one_ctrl_c_and_quits_on_two():
+    """Flow check through the real loop: the first KeyboardInterrupt prints
+    the clear hint and keeps the loop alive; an immediate second one exits
+    the loop without ever asking for input again."""
+    import asyncio
+
+    from agora.chat import ChatApp
+
+    app = ChatApp("http://127.0.0.1:1", "k", "tester")
+    out: list[str] = []
+    app._print = lambda text="": out.append(text)
+    prompts = {"count": 0}
+
+    async def scripted(prompt: str) -> str:
+        prompts["count"] += 1
+        if prompts["count"] <= 2:
+            raise KeyboardInterrupt     # two rapid Ctrl-C
+        raise AssertionError("loop should have quit on the second Ctrl-C")
+    app._make_prompt = lambda: scripted
+
+    asyncio.run(app._input_loop())      # returns instead of raising
+    assert prompts["count"] == 2
+    assert any("Ctrl-C again" in line for line in out)
 
 
 # -- dispatch: every /command in HELP must be wired ------------------------------

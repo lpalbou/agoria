@@ -869,12 +869,16 @@ class HubService:
         # escalation. A partial answer keeps it escalating with its pending
         # asks visible; has_resolved_reply travels so a reader is never cold.
         closed, pending, total, has_resolved = False, [], 0, False
+        already_read = False
         if message.status in (Status.open, Status.blocked):
             state = discharge_state(message, self.db.replies_to(message.id),
                                     self.operator_ids())
             closed = state.closed
             pending, total = state.pending, state.total
             has_resolved = state.has_resolved_reply
+            # Only the pinned class can re-deliver; a read receipt turns its
+            # re-surfaces headline-only (redelivery=true, body withheld).
+            already_read = self.db.has_read(message.id, viewer_id)
         return self.attention.envelope_for(
             viewer_id, message,
             parent_sender=parent.sender if parent else None,
@@ -886,6 +890,7 @@ class HubService:
             # obligation toward its SLA, so a resume cannot open onto an
             # escalation storm the pause itself manufactured.
             paused_seconds=self.paused_seconds_since(message.created_at),
+            already_read=already_read,
         )
 
     def channel_sla(self, channel: str) -> float:
@@ -1059,6 +1064,8 @@ class HubService:
                 "escalated": age > sla_cache[m.channel] * 60.0,
             })
         to_consume: list[dict[str, Any]] = []
+        waiting_on: list[dict[str, Any]] = []
+        cursor_cache: dict[tuple[str, str], int] = {}
         for m in self.db.my_open_messages(agent.id, channels):
             replies = self.db.replies_to(m.id)
             if closed_authoritatively(m, replies, ops):
@@ -1081,7 +1088,33 @@ class HubService:
                         "answer_seq": r.seq,
                         "age_minutes": round((now - r.created_at) / 60, 1),
                     })
+            # waiting_on (asker side of the debrief): per still-pending ask
+            # addressee, has the hub SERVED them past your question? "acked
+            # past, no reply" and "not yet served" are different waits — one
+            # is a nudge candidate, the other is an offline seat; seats spent
+            # real turns inferring this from presence, which the hub knew.
+            ds = discharge_state(m, replies, ops)
+            if ds.closed:
+                continue
+            repliers = {r.sender for r in replies}
+            for a in asks_of(m):
+                if str(a["id"]) not in ds.pending:
+                    continue
+                for seat in (a.get("to") or []):
+                    if seat in repliers:
+                        continue
+                    key = (seat, m.channel)
+                    if key not in cursor_cache:
+                        cursor_cache[key] = self.db.get_cursor(seat, m.channel)
+                    waiting_on.append({
+                        "channel": m.channel, "seq": m.seq, "ask": str(a["id"]),
+                        "seat": seat,
+                        "state": ("acked-past-no-reply"
+                                  if cursor_cache[key] >= m.seq
+                                  else "not-yet-acked"),
+                    })
         return {"to_answer": to_answer, "to_consume": to_consume,
+                "waiting_on": waiting_on,
                 "counts": {"to_answer": len(to_answer),
                            "to_consume": len(to_consume)}}
 

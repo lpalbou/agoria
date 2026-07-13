@@ -92,8 +92,13 @@ def test_minimal_legacy_event_flows_through_pipeline():
     ("reply-to-me", "fyi", True),
     ("critical", "fyi", True),
     ("escalated", "fyi", True),
-    ("", "open", True),
-    ("", "blocked", True),
+    # Bare open/blocked no longer qualifies (nine-seat debrief, 2026-07-14):
+    # broadcast obligations in a busy channel woke every seat and serialized
+    # fleets behind other seats' traffic. YOUR debt still wakes you — a
+    # pending ask naming you sets the to-me flag hub-side.
+    ("", "open", False),
+    ("", "blocked", False),
+    ("to-me", "open", True),          # addressed (to= or a pending ask): wake
     ("", "fyi", False),               # plain broadcast: not important
     ("", "reply", False),
     ("", "resolved", False),

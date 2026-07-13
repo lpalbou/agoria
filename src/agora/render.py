@@ -119,6 +119,11 @@ def render_envelopes(rows: list[dict[str, Any]]) -> str:
         if e.ask_progress:
             asks_field = e.ask_progress + (f" open:{','.join(e.pending_asks)}"
                                            if e.pending_asks else " (all answered)")
+            if e.your_pending_asks:
+                # WHOSE debt remains, machine-answered (nine-seat debrief):
+                # without this, seats re-read ask text every wake to learn a
+                # pinned message owed them nothing.
+                asks_field += f" YOURS:{','.join(e.your_pending_asks)}"
             # When the body (and thus data) is inlined, show the ask texts too
             # so the reader can answer without a second round-trip.
             texts = _asks_field(e.data)
@@ -132,10 +137,19 @@ def render_envelopes(rows: list[dict[str, Any]]) -> str:
             # open question cold when its thread already carries a resolution.
             "thread": ("a resolved reply exists — read the thread before "
                        "answering" if e.has_resolved_reply else ""),
+            **({"redelivery": "seen before — pinned because the obligation "
+                              "is still open"} if e.redelivery else {}),
             "size_bytes": e.body_bytes, "title": e.title,
         }
-        content = (e.body if e.body is not None
-                   else f"(body not delivered — read_message id={e.id} if the headline warrants it)")
+        if e.redelivery:
+            content = (f"(you have read this already — still pinned; "
+                       f"open asks {e.pending_asks or '[]'}"
+                       + (f", yours: {e.your_pending_asks}" if e.your_pending_asks
+                          else ", none yours")
+                       + f". read_message id={e.id} only to re-check.)")
+        else:
+            content = (e.body if e.body is not None
+                       else f"(body not delivered — read_message id={e.id} if the headline warrants it)")
         blocks.append(_fence(nonce, f"envelope id={e.id}", fields, content))
     triage = ("Triage: you MUST read CRITICAL and ESCALATED items. An "
               "open/blocked ask naming you — in `to` OR inside an ask — is "

@@ -200,9 +200,17 @@ class Envelope(BaseModel):
     data: dict[str, Any] | None = None   # included only when body is inlined
     reply_to: str | None = None
     pending_asks: list[str] = Field(default_factory=list)  # ask ids still unanswered
+    your_pending_asks: list[str] = Field(default_factory=list)
+    # ^ the subset of pending asks that name THIS viewer (per-ask to, 0077) —
+    #   the machine-readable "is this mine" every debrief asked for: a flag
+    #   that cannot distinguish "you owe" from "others owe" goes stale the
+    #   moment your half is discharged (field incident, 9-seat debrief).
     ask_progress: str = ""               # "answered/total", e.g. "1/3"; "" when no asks
     has_resolved_reply: bool = False     # a resolved reply exists in the thread —
                                          # check it before answering an old ask
+    redelivery: bool = False             # you already READ this pinned obligation:
+                                         # body withheld, headline-only re-surface
+                                         # (the 3.6KB x35 re-send cost, debrief F1)
     # Authorship (RESERVED for a future gateway-issued identity proof — see
     # thread 0006 P4). Present on every envelope NOW so consumers can hard-code
     # the shape before entities join; `verified_by` is always None until the

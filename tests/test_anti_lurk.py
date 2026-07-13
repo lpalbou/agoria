@@ -196,6 +196,49 @@ def test_addressed_obligation_survives_a_bare_read(client, room):
     assert not any(e["id"] == bmsg["id"] for e in _inbox(client, room["bystander"]))
 
 
+def test_debrief_fixes_envelope_scope_redelivery_and_waiting_on(client, room):
+    """The nine-seat debrief round (2026-07-14, dm replies): (a) a to-you
+    flag derived from asks must DROP once your ask is discharged (stale flags
+    made seats re-verify their own discharges for hours); (b) a read pinned
+    obligation re-surfaces headline-only with redelivery=true (full bodies
+    were re-sent dozens of times a night); (c) the asker sees per-addressee
+    delivery state (acked-past vs not-served) instead of inferring it."""
+    msg = _post(client, room["asker"], status="open", title="canvass",
+                body="x" * 600,
+                asks=[{"id": "1", "text": "for named", "to": ["named"]},
+                      {"id": "2", "text": "for bystander", "to": ["bystander"]}])
+
+    env = next(e for e in _inbox(client, room["named"]) if e["id"] == msg["id"])
+    assert env["to_me"] is True and env["your_pending_asks"] == ["1"]
+    assert env["redelivery"] is False and env["body"] is not None  # addressed inline
+
+    # (b) after reading, the pinned re-surface withholds the body.
+    client.get(f"/channels/canvass/messages/{msg['id']}", headers=_auth(room["named"]))
+    env = next(e for e in _inbox(client, room["named"]) if e["id"] == msg["id"])
+    assert env["redelivery"] is True and env["body"] is None
+
+    # (c) the asker's waiting_on distinguishes served-and-silent from unserved.
+    client.post("/inbox/ack", headers=_auth(room["named"]),
+                json={"cursors": {"canvass": msg["seq"]}})
+    owed = client.get("/owed", headers=_auth(room["asker"])).json()
+    states = {(w["seat"], w["state"]) for w in owed["waiting_on"]}
+    assert ("named", "acked-past-no-reply") in states
+    assert ("bystander", "not-yet-acked") in states
+
+    # (a) named answers its ask: the ask-derived flag and its debt drop while
+    # bystander's row stays open (and bystander keeps its flag).
+    _post(client, room["named"], status="reply", reply_to=msg["id"],
+          answers=["1"], title="mine done", body="done")
+    client.post("/inbox/ack", headers=_auth(room["named"]),
+                json={"cursors": {"canvass": 99}})
+    assert not any(e["id"] == msg["id"] for e in _inbox(client, room["named"]))
+    bys = next(e for e in _inbox(client, room["bystander"]) if e["id"] == msg["id"])
+    assert bys["to_me"] is True and bys["your_pending_asks"] == ["2"]
+    # waiting_on now names only bystander.
+    owed = client.get("/owed", headers=_auth(room["asker"])).json()
+    assert {w["seat"] for w in owed["waiting_on"]} == {"bystander"}
+
+
 def test_overview_counts_acked_unanswered(client, room):
     msg = _post(client, room["asker"], status="open", title="for named",
                 asks=[{"id": "1", "text": "row", "to": ["named"]}])

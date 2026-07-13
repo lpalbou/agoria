@@ -185,13 +185,20 @@ def parse_line(raw: str) -> dict[str, Any] | None:
 
 def qualifies(event: dict[str, Any], agent_id: str, important_only: bool = False) -> bool:
     """Own messages never wake (hub filters; legacy files may not);
-    --important-only narrows to obligations and attention flags."""
+    --important-only narrows to YOUR debt: to-me (message `to` or a pending
+    ask naming you — the hub folds both into the flag), reply-to-me,
+    critical, escalated. Bare open/blocked no longer qualifies — the
+    nine-seat debrief showed broadcast obligations in a busy channel waking
+    every seat, serializing whole fleets behind other seats' traffic. A
+    broadcast ask still reaches you at your next check_inbox and the stop
+    hook's turn-end sweep, and the dark watchdog still alerts the operator
+    when one rots on an offline seat."""
     if event["from"] == agent_id:
         return False
     if not important_only:
         return True
     tokens = {t for t in str(event.get("flags", "")).split(",") if t}
-    return bool(tokens & _IMPORTANT_FLAGS) or str(event.get("status")) in ("open", "blocked")
+    return bool(tokens & _IMPORTANT_FLAGS)
 
 
 def wake_line(events: list[dict[str, Any]], agent_id: str, *, preview: bool = False) -> str:

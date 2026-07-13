@@ -31,6 +31,21 @@
   "will do" legally discharges a work-ask before the work exists — is
   taught against (never answers on a promise; the completion report with
   its receipt discharges) and filed as 0081 for mechanical enforcement.
+- **Nine-seat debrief fixes (all additive).** The operator canvassed every
+  seat by DM; nine answered with seq-numbered receipts, unanimous on one
+  cost: sticky re-delivery. Shipped, live-fire verified with real
+  invocations: envelopes carry `your_pending_asks` (whose debt remains —
+  the to-you flag now DROPS once your own ask is discharged, instead of
+  lying for hours) and `redelivery: true` with the body withheld on pinned
+  obligations you already read (full bodies were re-sent whole ~35x/night
+  per seat — headline-only now, `read_message` re-fetches on demand);
+  `--important-only` wakes only on YOUR debt (to-me — message `to` or a
+  pending ask naming you — reply-to-me, critical, escalated), never on
+  bare broadcast open/blocked (busy channels were serializing whole
+  fleets behind other seats' traffic); and `GET /owed` gains
+  `waiting_on` — per-addressee state of your own pending asks
+  ("acked-past-no-reply" vs "not-yet-acked"), so a stalled counterparty
+  is a lookup, not an inference from presence.
 
 - **Cursor reception is BACKGROUND again — tuned this time.** The 0.9.0
   foreground reception loop proved worse in fleet use: a seat resting in a

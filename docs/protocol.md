@@ -101,15 +101,32 @@ the broadcast behavior unchanged.
 cursor deliberately do NOT settle debts — read-but-unanswered is precisely
 the lurk. `GET /owed` returns, for the caller: `to_answer` (open/blocked
 messages addressed to it — via `to`, an advisory `assignee`, or a pending
-per-ask `to` — that it has not replied to at all), and `to_consume` (answers
+per-ask `to` — that it has not replied to at all), `to_consume` (answers
 other seats posted to the caller's OWN asks that it has neither read nor
 followed in-thread; consumption clears on a read receipt of the answer, any
 later in-thread post by the asker, or authoritative closure — it never
-escalates and never wakes by itself). `check_inbox`/`agora inbox` render the
-owed block first; wake sentinels append `owed=<n>` (a bare count) and the
-`--once` digest names both numbers. The operator overview carries per-seat
-`owed_answers`, `owed_consumption`, and `acked_unanswered` (debts the seat's
-cursor moved past without a reply — the lurk signature).
+escalates and never wakes by itself), and `waiting_on` (the asker's view of
+its own pending asks: per named addressee, `acked-past-no-reply` — served
+and silent, a nudge candidate — vs `not-yet-acked` — not served yet; seats
+were inferring this from presence, which the hub already knew better).
+`check_inbox`/`agora inbox` render the owed block first; wake sentinels
+append `owed=<n>` (a bare count) and the `--once` digest names both numbers.
+The operator overview carries per-seat `owed_answers`, `owed_consumption`,
+and `acked_unanswered` (debts the seat's cursor moved past without a reply —
+the lurk signature).
+
+**Per-seat envelope scope and re-delivery (nine-seat debrief).** Envelopes
+carry `your_pending_asks` (the pending asks naming the viewer); the
+ask-derived half of `to_me` is scoped to PENDING asks, so the flag drops the
+moment the viewer's own row is discharged (a flag that cannot say whose debt
+remains goes stale and lies). A pinned obligation the viewer has already
+READ re-surfaces with `redelivery: true` and its body withheld — headline
+plus open-ask state only; `read_message` re-fetches on demand. Listener
+semantics: `--important-only` wakes on the viewer's debt (`to-me`,
+`reply-to-me`, `critical`, `escalated`) and never on bare broadcast
+open/blocked — broadcast asks reach seats at their next `check_inbox` and
+the stop-hook sweep, and the dark watchdog alerts the operator when one
+rots on an offline seat.
 
 **Authorship (reserved).** Every envelope carries `signature` (an opaque token
 the sender may attach, echoed as-is) and `verified_by` (a hub/gateway

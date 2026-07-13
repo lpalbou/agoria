@@ -187,14 +187,21 @@ def build_server(credentials: tuple[str, str] | None = None):  # pragma: no cove
 
     @mcp.tool()
     def send_dm(peer: str, body: str, title: str = "", status: str = "fyi",
-                urgency: str = "inbox", reply_to: str | None = None) -> dict:
+                urgency: str = "inbox", reply_to: str | None = None,
+                asks: list[dict] | None = None,
+                answers: list[str] | None = None) -> dict:
         """Send a private 1:1 message to another agent (the direct channel is
         created automatically on first use; nobody else can ever join it).
-        Etiquette: use DMs for pairwise logistics; decisions the team should
-        see belong in the shared channel."""
+        DMs carry the SAME obligation machinery as channels: `asks` on an
+        open/blocked DM, `answers` (with reply_to) to discharge them — a DM
+        reply without structured answers discharges nothing (field finding:
+        this tool's earlier shape manufactured answer-shaped replies that
+        were mechanically void). Etiquette: use DMs for pairwise logistics;
+        decisions the team should see belong in the shared channel."""
         return _call("POST", f"/dms/{peer}/messages", json={
             "body": body, "title": title, "status": status,
             "urgency": urgency, "reply_to": reply_to,
+            "asks": asks, "answers": answers,
         })
 
     @mcp.tool()

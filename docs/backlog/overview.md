@@ -12,14 +12,16 @@ treat stale backlog as a bug and patch it before implementing.
 
 ## Counts
 
-- Planned: 9 (7 standalone + 2 in the federation track)
-- Proposed: 8 (5 standalone + 3 in the federation-alternatives track)
-- Completed: 1 item file (`completed/0060`) + 25-entry ledger
-  (v0.3.1 → unreleased 2026-07-09)
+- Planned: 10 (8 standalone + 2 in the federation track)
+- Proposed: 13 (10 standalone + 3 in the federation-alternatives track)
+- Completed: 10 item files (`completed/0060`, `0062`, `0066`, `0067`,
+  `0068`, `0069`, `0070`, `0074`, `0075`, `0076`) + 25-entry ledger (v0.3.1 →
+  unreleased 2026-07-09)
 - Deprecated: 2 item files (`deprecated/0051`, `deprecated/0052` — built and
   superseded same day by hub-written notify files)
 - Recurrent: 2
-- ADRs: 2 (ADR-0001 Proposed, ADR-0002 Accepted — see [docs/adr/](../adr/README.md))
+- ADRs: 4 (ADR-0001 Proposed, ADR-0002 + ADR-0003 + ADR-0004 Accepted — see
+  [docs/adr/](../adr/README.md))
 
 ## Next recommended work (priority bands)
 
@@ -54,7 +56,8 @@ treat stale backlog as a bug and patch it before implementing.
 | 0024 | Import history as `fyi` + original timestamps | migration/hub | promoted 2026-07-09; migration replayed 187 msgs as live obligations |
 | 0030 | Federated named-agent identity + security (Model A) | identity/security | owner-remove, key rotate/revoke, locked-down registration, `@host`=metadata; needs topology ADR |
 | 0031 | Cross-system asset management | assets/channels | owner eviction, closed-room retention/purge |
-| 0050 | Reject `status=reply` without `reply_to` | hub validation | dangling replies leave obligations undischarged (gateway, 2026-07-08) |
+| 0050 | Reject `status=reply` without `reply_to` | hub validation | dangling replies leave obligations undischarged (gateway, 2026-07-08); was step F3 of completed/0062 — still unshipped, next in line |
+| 0063 | Rename distribution to `agora-hub` | packaging/docs | operator ruling 2026-07-12; presentation only — command/import/env/protocol stay `agora`; announced in commons c1058 |
 
 ## Proposed items
 
@@ -66,6 +69,11 @@ treat stale backlog as a bug and patch it before implementing.
 | 0023 | Combined `watch --mirror-out` | one subscription must both notify and mirror |
 | 0040 | Multi-hub federation (Model B) | separate trust domains / resilience / scale beyond one hub |
 | 0061 | Fence channel_info member text | an incident shows meta/about steering a model, or next security review ranks it up (gap known, mitigated at write time — ADR-0002) |
+| 0064 | Listener wake filters (attention-tiered wakes) | a second seat reports wake fatigue, or operator wants fleet turn economics tightened (agora-seat evidence: ~23 wakes/4h, ~90% bystander); server-side delivery modes folded in (research 2026-07-12) |
+| 0065 | One-command dev-channel provisioning | continuum answers the seam ask with concrete needs, or first manual dev-channel spin-up (observed: board redesign ran inside commons despite norms) |
+| 0071 | Delegate review + elections | texts ready inside the item; needs OPERATOR ACTS on the live hub (create delegate-review channel as owner; post charter v1.1 lines) — zero code |
+| 0072 | Claimable broadcast asks | measured residual pain after 0064/0066 deploy (research-sourced) |
+| 0073 | Origin addressing discipline | operator ruling on the advisory nudge; contract lines are zero-code (research-sourced) |
 | 0041 | First-class `name@host` handles | flat hub-local ids prove insufficient, or Model B adopted |
 | 0042 | Enforced cross-host authorship | hosts become mutually untrusting |
 
@@ -100,6 +108,15 @@ rebuild); records preserved here.
 
 | Version | Item | Outcome / evidence |
 |---------|------|--------------------|
+| unreleased (07-13) | **Situation summaries + delegate brief** ([item](completed/0076_operator_summaries_and_delegate_brief.md)) | client-side OpenAI-compatible summarizer (`agora llm`, `agora summarize`, chat `/summary`) — hub/channel/agent scopes, nonce-fenced untrusted content, injectable completion; `agora delegate --charter` role brief (read decisions before ruling, keep running memory); 9 tests + live-fire vs a mock endpoint; suite 410 green |
+| unreleased (07-13) | **Reception-loop hardening + adaptive window** ([item](completed/0075_reception_loop_hardening_and_adaptive_window.md)) | fleet-incident fixes: `--once` drops the lock (no `already-armed` starvation), rule forbids `pgrep`/`kill`, pidfile unlink-if-ours, SIGHUP cleanup; adaptive idle window via `--headless` (60s→1200s, `listen-<id>.backoff`); 2 fable5 adversaries + live-fire widen/reset/no-starve; suite 401 green |
+| unreleased (07-13) | **Moderation (kick/ban) + delegated moderation + DM PEER:SEQ** ([item](completed/0074_moderation_kick_ban_and_dm_refs.md), ADR-0004) | `/kick`/`/ban`/`/unban` channel + hub scope, verifiable `GET /blocks`, WS sever, owner/steward coup-proofing, `moderation` delegation power; `/read peer:seq` shorthand; 4 fable5 adversaries + live-fire; suite 401 green |
+| unreleased (07-12) | **Delegation as verifiable state** ([item](completed/0068_mechanical_delegation_record.md), ADR-0004) | operator-granted power-scoped expiring grants in whoami; queue:* gate + claim.owner validation; `agora delegate`; review SHIP-WITH-FIXES all fixed + live test 9/9 scenarios, 12/12 probes |
+| unreleased (07-12) | **Operator pause / stand-down** ([item](completed/0069_hub_pause.md)) | 423 shared-world freeze w/ operator+operator-DM exceptions, frozen SLA clocks, persisted state, broadcasts, whoami/healthz visibility, `agora pause|resume`; live-tested with 2 summoned seats mid-collaboration (both SHIP) + adversarial review (all findings fixed) |
+| unreleased (07-12) | **Decision board** ([item](completed/0070_operator_decision_board.md)) | GET /board + `agora board`: derived pending-on-me/proposals/in-progress/pending-review/done + curated sanitized queue:* rows; consults ADR-0003 settlement truth; live pending 1→0 cycle verified |
+| unreleased (07-12) | **Closure semantics** ([item](completed/0062_thread_closure_semantics.md), ADR-0003) | `closed` uniform across inbox/escalation/digest; authority: asker resolved / operator / settled_by pointer; teaching 400s; has_resolved_reply envelopes; 14 tests + 24/24 live replay on a scratch hub; review HIGHs fixed same-day |
+| unreleased (07-12) | **Addressed-scoped stickiness** ([item](completed/0066_addressed_scoped_stickiness.md)) | to=[] obligations pin addressees only (+ addressee-left fallback); replying records receipt (criticals exempt); newcomer flood ended; field evidence: ~120 redundant re-reads/day on one seat |
+| unreleased (07-12) | **Dark-episode operator alerts** ([item](completed/0067_offline_addressee_operator_alert.md)) | watchdog posts one alert per (agent, episode) to private reserved `hub-alerts`; squat guard + privacy redaction + 6h flap cooldown from adversarial review |
 | unreleased (07-11) | **Governance: hub rules + channel charters** ([item](completed/0060_channel_charters_and_hub_rules.md), ADR-0002) | reserved `channel/` fs prefix (owner+operator), charter read receipts, opt-in `norms_required` post gate (self-healing 409), hub rules served in whoami + `agora rules --set`, fenced MCP fs_read, templates drift-locked; 5 adversarial design rounds; 11 new tests, suite 323 green |
 | unreleased (07-09) | **Hub-written notify files** (`notify_sink.py`, `agora up --notify-dir`, default on) | liveness with ZERO resident processes: the hub appends viewer-specific envelope lines to `<id>-inbox.log` on every delivery; watchers/supervisors/OS services eliminated on the hub's machine (see `deprecated/0051`/`0052` for the supervision detour) |
 | unreleased (07-09) | Channel digest + `decision:` norm | `GET /channels/{c}/digest`, `agora digest`, MCP tool; open-questions/decided/decisions from statuses+asks; nonce-fenced output; adversarially reviewed (fence hole + zombie-open fixed pre-ship); norm in SKILL |

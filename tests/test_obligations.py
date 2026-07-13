@@ -75,6 +75,8 @@ def test_discharge_asks_requires_all_answered():
 
 def test_partial_answer_keeps_obligation_open_full_answer_clears(service, team):
     alice, bob = team
+    carol, _ = service.register_agent("carol", "Carol")
+    service.join_channel(carol, "design", service.create_invite(alice, "design", invitee="carol"))
     m = service.post_message(alice, "design", PostMessage(
         status=Status.open, title="seam", body="three questions",
         asks=[{"id": "1", "text": "cap?"}, {"id": "2", "text": "owner?"}, {"id": "3", "text": "when?"}]))
@@ -83,34 +85,44 @@ def test_partial_answer_keeps_obligation_open_full_answer_clears(service, team):
 
     service.post_message(bob, "design", PostMessage(
         status=Status.reply, reply_to=m.id, body="cap is 4k", answers=["1"]))
-    _ack_head(service, bob)  # cursor past everything: only the STICKY path remains
-    env = _envelope(service, bob, m.id)
+    # The ROOM still owes answers: a member who hasn't attended to the
+    # message stays pinned with exact progress. The partial ANSWERER does
+    # not — replying records their read receipt (0066), and receipts were
+    # always the per-member unpin.
+    _ack_head(service, carol)  # cursor past everything: only the STICKY path remains
+    env = _envelope(service, carol, m.id)
     assert env is not None, "a partially-answered obligation must stay pinned in the inbox"
     assert env.ask_progress == "1/3" and env.pending_asks == ["2", "3"]
+    _ack_head(service, bob)
+    assert _envelope(service, bob, m.id) is None, "the answerer attended to it (receipt)"
 
     service.post_message(bob, "design", PostMessage(
         status=Status.reply, reply_to=m.id, body="rest", answers=["2", "3"]))
-    _ack_head(service, bob)
-    assert _envelope(service, bob, m.id) is None, "fully answered -> obligation clears"
+    _ack_head(service, carol)
+    assert _envelope(service, carol, m.id) is None, "fully answered -> obligation clears"
 
 
 def test_answers_are_idempotent_and_order_independent(service, team):
     """Duplicate / out-of-order answers must collapse: answering 2, then 2
-    again, then 1 fully discharges a 2-ask message and never miscounts."""
+    again, then 1 fully discharges a 2-ask message and never miscounts.
+    Progress is observed through a THIRD member (the answerer's own pin
+    drops on reply — receipt semantics, 0066)."""
     alice, bob = team
+    carol, _ = service.register_agent("carol", "Carol")
+    service.join_channel(carol, "design", service.create_invite(alice, "design", invitee="carol"))
     m = service.post_message(alice, "design", PostMessage(
         status=Status.open, body="q", asks=[{"id": "1", "text": "a"}, {"id": "2", "text": "b"}]))
     service.post_message(bob, "design", PostMessage(
         status=Status.reply, reply_to=m.id, body="two", answers=["2"]))
     service.post_message(bob, "design", PostMessage(
         status=Status.reply, reply_to=m.id, body="two again", answers=["2"]))
-    _ack_head(service, bob)
-    env = _envelope(service, bob, m.id)
+    _ack_head(service, carol)
+    env = _envelope(service, carol, m.id)
     assert env is not None and env.ask_progress == "1/2" and env.pending_asks == ["1"]
     service.post_message(bob, "design", PostMessage(
         status=Status.reply, reply_to=m.id, body="one", answers=["1"]))
-    _ack_head(service, bob)
-    assert _envelope(service, bob, m.id) is None
+    _ack_head(service, carol)
+    assert _envelope(service, carol, m.id) is None
 
 
 def test_multiple_answerers_union_discharges(service, team):

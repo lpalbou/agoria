@@ -30,10 +30,11 @@ import httpx
 import pytest
 
 from agora.hub.notify_sink import NotifySink, notify_line
-from agora.listen import (ARM_BANNER, DebounceBatcher, _announce_armed, acquire_lock,
-                          follow_lines, once_digest, parse_line, qualifies,
+from agora.listen import (ADAPT_CAP_DEFAULT, ADAPT_MIN, ARM_BANNER, DebounceBatcher,
+                          _announce_armed, acquire_lock, follow_lines, next_backoff,
+                          once_digest, parse_line, qualifies, read_backoff,
                           resolve_identity, resolve_source, run_file_mode, run_listen,
-                          wake_line)
+                          wake_line, write_backoff)
 from agora.models import Envelope, Kind, Status, Urgency
 
 ADMIN = "listen-test-admin"
@@ -439,6 +440,75 @@ def test_acquire_lock_idempotence_and_stale_takeover(tmp_path):
     assert acquire_lock(lock) is True
 
 
+# -- adaptive backoff: pure ceiling math (no clock, no IO) ------------------------------
+
+
+def test_next_backoff_widens_on_idle_resets_on_wake_holds_otherwise():
+    cap = 1200.0
+    # exit 0 (clean idle timeout) doubles, capped.
+    assert next_backoff(60, 0, cap) == 120
+    assert next_backoff(960, 0, cap) == 1200
+    assert next_backoff(1200, 0, cap) == 1200          # already at cap
+    # exit 2 (a message woke us) snaps straight back to the tight window.
+    assert next_backoff(1200, 2, cap) == ADAPT_MIN
+    # anything else (signal, hub-unreachable=3, error) leaves it unchanged.
+    assert next_backoff(480, 3, cap) == 480
+    assert next_backoff(480, 1, cap) == 480
+
+
+def test_read_backoff_defaults_and_clamps(tmp_path):
+    path = tmp_path / "listen-bob.backoff"
+    assert read_backoff(path, 1200) == ADAPT_MIN        # missing -> MIN (more checks)
+    write_backoff(path, 480)
+    assert read_backoff(path, 1200) == 480
+    write_backoff(path, 999999)                         # absurd -> clamped to cap
+    assert read_backoff(path, 1200) == 1200
+    path.write_text("{ not json")                       # corrupt -> MIN, never crashes
+    assert read_backoff(path, 1200) == ADAPT_MIN
+
+
+def test_once_without_explicit_lock_does_not_contend(tmp_path, monkeypatch, capsys):
+    """The fleet's starvation: a harness-orphaned prior --once held the lock,
+    so the live iteration bounced `already-armed` instantly and spun. Fix: a
+    --once call with NO explicit --lock never acquires the lock, so a stale
+    lock file cannot make it bounce — it proceeds to (briefly) listen."""
+    import agora.config as _cfg
+    monkeypatch.setattr(_cfg, "home", lambda: tmp_path)
+    (tmp_path / "bob-inbox.log").write_text("")
+    # A leftover lock owned by a *live* process (us) would, under the old
+    # code, force `already-armed`. Now it is ignored in --once no-lock mode.
+    (tmp_path / "listen-bob.lock").write_text(str(os.getpid()))
+    rc = run_listen(agent_id="bob", url="http://127.0.0.1:8765", source="file",
+                    once=True, max_wait=0.3, debounce=0.05, heartbeat=0,
+                    poll=0.02, cwd=tmp_path)
+    text = capsys.readouterr().out
+    assert rc == 0                                   # clean idle timeout, not a bounce
+    assert "already-armed" not in text               # never contended
+    assert "armed source=file" in text               # actually listened
+    # It must not have deleted the pre-existing foreign lock on the way out.
+    assert (tmp_path / "listen-bob.lock").exists()
+
+
+def test_adaptive_widens_backoff_file_across_idle_calls(tmp_path, monkeypatch):
+    """Widening persists across invocations via the backoff file. ADAPT_MIN
+    is patched tiny so the test waits milliseconds, not a real minute."""
+    import json as _json
+
+    import agora.config as _cfg
+    import agora.listen as _listen
+    monkeypatch.setattr(_cfg, "home", lambda: tmp_path)
+    monkeypatch.setattr(_listen, "ADAPT_MIN", 0.1)   # functions read the module global
+    (tmp_path / "bob-inbox.log").write_text("")
+    backoff = tmp_path / "listen-bob.backoff"
+    common = dict(agent_id="bob", url="http://127.0.0.1:8765", source="file",
+                  once=True, max_wait=1200, debounce=0.02, heartbeat=0,
+                  poll=0.02, adaptive=True, cwd=tmp_path)
+    run_listen(**common)                             # 0.1 -> 0.2
+    assert _json.loads(backoff.read_text())["ceiling"] == pytest.approx(0.2)
+    run_listen(**common)                             # 0.2 -> 0.4
+    assert _json.loads(backoff.read_text())["ceiling"] == pytest.approx(0.4)
+
+
 # -- in-process resource cleanup and crash tombstone -----------------------------------
 
 
@@ -782,17 +852,40 @@ def test_rotation_mid_stream_loses_nothing_end_to_end(tmp_path, spawn):
 
 
 def test_stale_lock_is_taken_over(tmp_path, spawn):
+    """Stale-lock takeover applies on the EXPLICIT --lock path (Claude's
+    hook-armed single-shots, which pass --lock to dedup duplicate firings).
+    A dead holder's lock is reclaimed and released on exit."""
     home = tmp_path / "home"
     home.mkdir()
     (home / "bob-inbox.log").write_text("")
     dead = subprocess.Popen([sys.executable, "-c", "pass"])
     dead.wait()
-    (home / "listen-bob.lock").write_text(str(dead.pid))    # dead holder
+    lock = home / "listen-bob.lock"
+    lock.write_text(str(dead.pid))                          # dead holder
     listener = spawn(["--as", "bob", "--source", "file", "--once",
-                      "--poll", "0.02", "--max-wait", "0.5"], _proc_env(home))
+                      "--lock", str(lock), "--poll", "0.02", "--max-wait", "0.5"],
+                     _proc_env(home))
     listener.wait_line("AGORA_LISTEN armed")                # took over, armed fine
     assert listener.wait_exit() == 0
-    assert not (home / "listen-bob.lock").exists()
+    assert not lock.exists()
+
+
+def test_once_without_lock_ignores_a_stale_lock(tmp_path, spawn):
+    """Regression for the fleet starvation: the reception-loop --once (NO
+    --lock) must ignore any lock file entirely — never bounce `already-armed`
+    off a leftover, and never delete a file it does not own."""
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "bob-inbox.log").write_text("")
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead.wait()
+    lock = home / "listen-bob.lock"
+    lock.write_text(str(dead.pid))                          # a leftover lock
+    listener = spawn(["--as", "bob", "--source", "file", "--once",
+                      "--poll", "0.02", "--max-wait", "0.5"], _proc_env(home))
+    listener.wait_line("AGORA_LISTEN armed")                # armed, did NOT bounce
+    assert listener.wait_exit() == 0
+    assert lock.read_text() == str(dead.pid)                # untouched, not ours
 
 
 def test_auto_resolution_from_workspace_and_marker_own_line_filtering(tmp_path, spawn):

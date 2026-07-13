@@ -48,6 +48,24 @@ def channel_table(channels: list[dict[str, Any]], unread: dict[str, int],
                                  now=now)
 
 
+def _summarize_sync(url: str, api_key: str, agent_id: str, llm: dict[str, Any],
+                    channel: str | None, agent: str | None) -> str:
+    """Run the (blocking) summarizer with its OWN client in a fresh event loop
+    — called via asyncio.to_thread so the chat's live pump never blocks on the
+    model. Kept module-level so it is trivially unit-testable."""
+    from .client import AgoraClient
+    from .summarize import summarize
+
+    async def _go() -> str:
+        client = AgoraClient(url, api_key, agent_id=agent_id)
+        try:
+            return await summarize(client, llm, channel=channel, agent=agent)
+        finally:
+            await client.close()
+
+    return asyncio.run(_go())
+
+
 # -- pure helpers (unit-tested) ------------------------------------------------
 
 def derive_title(text: str, limit: int = 80) -> str:
@@ -106,6 +124,9 @@ plain text          post to the current channel (status=fyi, no obligation)
 /switch NAME (/c)   enter a room (auto-joins public rooms; also /join NAME TOKEN)
 /history [N] (/h)   last N messages of this room (default 15)
 /digest             open questions / decided / decisions of this room
+/summary [TARGET]   LLM summary (situation / pending / done / blocked) of the
+                    whole hub from your view, a CHANNEL, or an @agent. Needs
+                    an endpoint set once: `agora llm --base-url ... --model ...`
 /vote TOPIC | A | B open a BLIND vote (ballots arrive as DMs to you, so no
                     voter sees another's choice; add options with |).
                     Auto-publishes on deadline (default 30m, lead with
@@ -116,7 +137,13 @@ plain text          post to the current channel (status=fyi, no obligation)
 /who                presence of everyone you share a channel with
 /read REF           full body of one message (records a read receipt)
                     REF: SEQ or ID in this room; SEQ@CHANNEL from any room
-                    (seqs repeat across channels; @PEER works for DMs)
+                    (seqs repeat across channels); DMs: PEER:SEQ, e.g.
+                    /read artemis:3 (CHANNEL:SEQ works too)
+/kick AGENT         remove from THIS room, rejoin refused for 15m
+                    (--time 30mn/2h overrides; --target hub = full hub
+                    lockout, operator only; trailing words = the reason)
+/ban AGENT          same but forever (--time makes it a timed ban);
+                    /unban AGENT [--target hub] lifts either early
 /quit (/q)          leave the chat (membership persists)
 Ctrl-C              clear the input line (twice within 2s to quit)"""
 
@@ -158,9 +185,13 @@ class ChatApp:
         if env.critical:
             # Criticals from other rooms render here too — hint the
             # qualified ref, since a bare seq would resolve in the wrong
-            # channel (seqs are only unique per channel).
-            ref = env.seq if env.channel == self.current \
-                else f"{env.seq}@{env.channel}"
+            # channel (seqs are only unique per channel). DM criticals
+            # teach the short PEER:SEQ form.
+            peer = dm_peer(env.channel, self.me)
+            if env.channel == self.current:
+                ref = env.seq
+            else:
+                ref = f"{peer}:{env.seq}" if peer else f"{env.seq}@{env.channel}"
             self._print(s.red("═" * term_width()))
             self._print(s.red(f" CRITICAL from {env.sender} in {env.channel}"
                               f" — pinned until you /read {ref}"))
@@ -244,7 +275,19 @@ class ChatApp:
         ULIDs nor ask ids may contain one), THEN on the first ':' of the
         local part only — channel names legitimately contain ':' (dm:a--b).
         ':ASK' names the ask(s) a /reply answers, e.g. '727:1' or '727:1,2'
-        (unknown ids are rejected loudly by the hub, never mis-filed)."""
+        (unknown ids are rejected loudly by the hub, never mis-filed).
+
+        DM sugar, leading form: 'artemis:3' == '3@artemis' — a DM has ONE
+        peer, so PEER:SEQ is the natural handle (TARGET:SEQ also resolves
+        plain channels). Only a NON-NUMERIC head that resolves to a channel
+        or DM peer of mine is rewritten, so '727:1' (SEQ:ASK) and ULID:ASK
+        fall through to the classic parse untouched."""
+        if "@" not in ref and ":" in ref:
+            head, _, rest = ref.partition(":")
+            if head and rest and not head.isdigit():
+                target = await self._target_channel(head)
+                if target is not None:
+                    ref = f"{rest}@{head}"
         local, _, at = ref.partition("@")
         local, _, ask_part = local.partition(":")
         ask_ids = [a.strip() for a in ask_part.split(",") if a.strip()]
@@ -569,6 +612,41 @@ class ChatApp:
                 return [str(a["id"]) for a in q.get("pending_asks", [])]
         return []
 
+    async def cmd_summary(self, arg: str) -> None:
+        """`/summary` (whole hub from your view), `/summary CHANNEL` (one room),
+        or `/summary @agent` (everything about one peer). Uses the endpoint set
+        by `agora llm` — a calm, out-of-band read of a noisy hub."""
+        from . import config as _config
+        from .summarize import SummarizerError, summarize
+
+        llm = _config.load_llm()
+        if not llm.get("base_url") or not llm.get("model"):
+            self._print(self.style.red(
+                "no summarizer endpoint configured — run `agora llm --base-url "
+                "URL --model NAME [--api-key KEY]` first"))
+            return
+        target = arg.strip()
+        channel = agent = None
+        if target.startswith("@"):
+            agent = target[1:]
+        elif target:
+            channel = target
+        self._print(self.style.dim("summarizing…"))
+        try:
+            # Its own client in a worker thread (a fresh event loop): the chat's
+            # async client stays on the main loop, so the live pump keeps
+            # rendering traffic while the model thinks.
+            text = await asyncio.to_thread(
+                _summarize_sync, self.client.base_url, self.client.api_key,
+                self.me, llm, channel, agent)
+        except SummarizerError as exc:
+            self._print(self.style.red(f"summary failed: {exc}"))
+            return
+        except Exception as exc:
+            self._print(self.style.red(f"summary failed: {exc}"))
+            return
+        self._print(text)
+
     async def cmd_read(self, ref: str) -> None:
         """Deliberate read: the full body, uncapped — this is the command the
         preview's '⋯ N more line(s)' hint points at, so it must never
@@ -650,6 +728,97 @@ class ChatApp:
         elif status == Status.fyi:
             note += " — no obligation; expecting answers? use /ask"
         self._print(self.style.dim(note + ")"))
+
+    @staticmethod
+    def _parse_moderation(arg: str) -> tuple[str, float | None, str, str] | str:
+        """'AGENT [--time 15m|30mn|2h] [--target channel|hub] [reason...]' ->
+        (agent, seconds|None, target, reason) — or an error string. 'mn' is
+        accepted for minutes (the operator writes it); a missing --time means
+        the CALLER's default (kick: 15m; ban: forever), so None here."""
+        from .join import parse_ttl
+        tokens = arg.split()
+        if not tokens or tokens[0].startswith("--"):
+            return "usage: AGENT [--time 15m] [--target channel|hub] [reason]"
+        agent, seconds, target, reason_parts = tokens[0], None, "channel", []
+        i = 1
+        while i < len(tokens):
+            tok = tokens[i]
+            key, _, inline = tok.partition("=")
+            if key in ("--time", "--target"):
+                value = inline
+                if not value:
+                    i += 1
+                    if i >= len(tokens):
+                        return f"{key} needs a value"
+                    value = tokens[i]
+                if key == "--time":
+                    try:
+                        seconds = parse_ttl(value.lower().replace("mn", "m"))
+                    except ValueError as exc:
+                        return str(exc)
+                else:
+                    if value not in ("channel", "hub"):
+                        return "--target must be 'channel' or 'hub'"
+                    target = value
+            else:
+                reason_parts.append(tok)
+            i += 1
+        return agent, seconds, target, " ".join(reason_parts)
+
+    async def cmd_kick(self, arg: str, *, ban: bool) -> None:
+        """/kick: timed block (default 15m) — removed now, rejoin refused
+        until expiry. /ban: the same block with no expiry (or --time for a
+        timed one). Default scope is THIS channel; --target hub locks the
+        identity out of the whole hub (operator only, enforced server-side)."""
+        parsed = self._parse_moderation(arg)
+        if isinstance(parsed, str):
+            self._print(f"usage: /{'ban' if ban else 'kick'} AGENT [--time 15m] "
+                        f"[--target channel|hub] [reason] — {parsed}")
+            return
+        agent, seconds, target, reason = parsed
+        if seconds is None and not ban:
+            seconds = 900.0  # kick default: 15 minutes
+        channel = None if target == "hub" else self.current
+        if target == "channel" and channel is None:
+            self._print("no current channel — /switch NAME first, or --target hub")
+            return
+        try:
+            block = await self.client.impose_block(
+                agent, channel=channel, seconds=seconds, reason=reason)
+        except Exception as exc:
+            self._print(self.style.red(f"cannot {'ban' if ban else 'kick'} "
+                                       f"{agent}: {exc}"))
+            return
+        scope = block.get("scope", target)
+        if block.get("expires_at"):
+            until = time.strftime("%H:%M", time.localtime(block["expires_at"]))
+            self._print(self.style.dim(
+                f"({agent} kicked from {scope} until {until} — /unban {agent}"
+                + (" --target hub" if target == "hub" else "") + " lifts it early)"))
+        else:
+            self._print(self.style.dim(
+                f"({agent} BANNED from {scope} — /unban {agent}"
+                + (" --target hub" if target == "hub" else "") + " lifts it)"))
+
+    async def cmd_unban(self, arg: str) -> None:
+        """Lift a kick or ban early (channel scope by default, --target hub)."""
+        parsed = self._parse_moderation(arg)
+        if isinstance(parsed, str):
+            self._print(f"usage: /unban AGENT [--target channel|hub] — {parsed}")
+            return
+        agent, _, target, _ = parsed
+        channel = None if target == "hub" else self.current
+        if target == "channel" and channel is None:
+            self._print("no current channel — /switch NAME first, or --target hub")
+            return
+        try:
+            res = await self.client.lift_block(agent, channel=channel)
+        except Exception as exc:
+            self._print(self.style.red(f"cannot unban {agent}: {exc}"))
+            return
+        self._print(self.style.dim(
+            f"({agent}: " + ("block lifted" if res.get("lifted")
+                             else "no active block") + f" in {res.get('scope')})"))
 
     async def cmd_dm(self, arg: str) -> None:
         peer, _, text = arg.partition(" ")
@@ -740,7 +909,11 @@ class ChatApp:
             "tally": lambda: self.cmd_tally(arg),
             "who": self.cmd_who,
             "members": self.cmd_members,
+            "summary": lambda: self.cmd_summary(arg),
             "read": lambda: self.cmd_read(arg),
+            "kick": lambda: self.cmd_kick(arg, ban=False),
+            "ban": lambda: self.cmd_kick(arg, ban=True),
+            "unban": lambda: self.cmd_unban(arg),
             "ack": lambda: self.client.ack(),
             "help": lambda: self._print(HELP),
         }
@@ -789,7 +962,11 @@ class ChatApp:
         width = term_width()
         self._print(s.cyan("═" * width))
         role = s.yellow(" · operator") if operator else ""
-        self._print(f" {s.bold('agora chat')} — {s.sender(self.me)}{role}")
+        # Show the running hub's version + wire protocol at login, so it is
+        # obvious what you are connected to (single source: agora.__version__).
+        ver = me.get("version")
+        ver_s = s.dim(f"  hub v{ver} ({me.get('protocol', '')})") if ver else ""
+        self._print(f" {s.bold('agora chat')} — {s.sender(self.me)}{role}{ver_s}")
         self._print(s.cyan("═" * width))
         self._print(_render_channel_table(
             s, channels, await self._unread_by_channel(), self.current,

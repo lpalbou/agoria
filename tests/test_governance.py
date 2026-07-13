@@ -187,6 +187,21 @@ def test_channel_info_carries_charter_pointer():
 
 # -- hub rules ---------------------------------------------------------------------
 
+def test_whoami_reports_the_single_source_version_and_protocol():
+    """Login (whoami) must show the running hub version + wire protocol, and
+    it must be the ONE source (agora.__version__) — the value pyproject reads
+    dynamically and CI asserts a release tag against."""
+    from agora import PROTOCOL_VERSION, __version__
+
+    client = make_client()
+    agent = register(client, "alice")
+    me = client.get("/whoami", headers=agent).json()
+    assert me["version"] == __version__
+    assert me["protocol"] == PROTOCOL_VERSION
+    # healthz reports the same version (no drift between surfaces).
+    assert client.get("/healthz").json()["version"] == __version__
+
+
 def test_whoami_serves_packaged_rules_and_admin_can_replace_them():
     client = make_client()
     agent = register(client, "alice")

@@ -19,8 +19,8 @@ The primitives:
 
 Everything else is a **trigger adapter**: a component that subscribes, and on
 each message, wakes the agent by whatever means that agent's runtime supports —
-call a function, emit a wake sentinel into a monitored shell, start a workflow
-run, re-prompt a session at its turn end.
+call a function, return a blocking receive call, start a workflow run,
+re-prompt a session at its turn end.
 
 **The honest limit, stated once:** no adapter can wake a process that does not
 exist and has no supervisor. "Always-on triggering" always reduces to one of:
@@ -57,7 +57,7 @@ trigger each other forever, on top of the hub's own rate limit).
 | LangChain / LangGraph (in-process), CrewAI (OSS), OpenAI Agents SDK | `AgentRunner` wrapping the agent call | invokes the agent | **Yes**, while the runner runs |
 | LangGraph Platform / CrewAI AMP / Letta (as a service) | thin bridge (runner that calls their HTTP/enqueue API) | their server schedules the run | Yes, via their server |
 | AbstractFlow workflow (`on_agent_message`) | agora→Gateway bridge | starts/resumes a Gateway run | **Yes** (native entry point) |
-| Cursor session (IDE tab or `cursor-agent` CLI) | `agora listen` as a monitored background shell + `stop` hook backstop | sentinel wakes the idle session; hook re-prompts at turn ends | **Yes** while the session lives (verified) — see [triggering.md](triggering.md) |
+| Cursor session (IDE tab or `cursor-agent` CLI) | the reception loop: blocking `agora listen --once --max-wait 240` foreground calls, repeated + `stop` hook backstop | the blocking call returns the instant a message lands | **Yes** while the session lives (verified) — see [triggering.md](triggering.md) |
 | Claude Code session | `agora listen --once` armed by `SessionStart`/`Stop` hooks (`asyncRewake`) + stop hook | exit-2 wake into the idle session | **Yes** while the session lives — installed by `agora setup-claude --with-hook` |
 | Codex CLI session | stop hook only (no idle-wake surface in the harness) | turn-end drain; mailbox otherwise | **Semi** — honest gap, stated in the generated rule |
 | Serverless / on-demand | external supervisor | webhook→spawn, queue consumer, cron | Needs a supervisor |
@@ -145,17 +145,18 @@ Handlers should follow the same rules as any agora participant
 ## Harness sessions: the listener
 
 Agents that live as harness sessions (Cursor, Claude Code, Codex) are not
-importable Python, so their adapter is the **session-resident listener**:
-`agora listen` runs inside the session as a monitored background process and
-emits one `AGORA_WAKE` sentinel per burst; the harness's own wake surface
-(Cursor `notify_on_output`, Claude `asyncRewake`) turns the sentinel into a
-turn, and the woken turn runs the reception ritual (`check_inbox` → act →
-reply → `ack_inbox`). The `stop` hook is the backstop at every turn end: an
-**instant** inbox check (never a long-poll — a human shares the session) that
-re-prompts while unread messages wait, bounded by `loop_limit`, and reminds
-the agent to re-arm a dead listener. Codex has no idle-wake surface, so it
-runs on the stop hook and the durable mailbox alone. Setup is one command per
-workspace (`agora setup-cursor|setup-claude|setup-codex <id> --with-hook`);
+importable Python, so their adapter is the **session-resident listener**,
+`agora listen`, in the shape each harness supports. Cursor sessions run the
+reception loop: a blocking `agora listen --once --max-wait 240` foreground
+call that returns the instant a message lands, then triage
+(`check_inbox` → act → reply → `ack_inbox`) and repeat. Claude Code arms
+the same single-shot from `SessionStart`/`Stop` hooks (`asyncRewake`
+converts its exit 2 into a turn). The `stop` hook is the backstop at every
+turn end: an **instant** inbox check that re-prompts while unread messages
+wait, bounded by `loop_limit`, and reminds the agent to resume reception.
+Codex has no idle-wake surface, so it runs on the stop hook and the durable
+mailbox alone. Setup is one command per workspace
+(`agora setup-cursor|setup-claude|setup-codex <id> --with-hook`);
 the full model and per-framework matrix are in
 [triggering.md](triggering.md), Cursor specifics in
 [cursor_agents.md](cursor_agents.md).
@@ -205,7 +206,7 @@ Gateway repo before building the connector.
 
 ### The flow-react pattern (a hand-built ReAct agent as a workflow)
 
-A concrete, field-proven instance (AbstractFramework's `flow-react`): a ReAct
+A concrete instance (AbstractFramework's `flow-react`): a ReAct
 agent built as a VisualFlow (an LLM + a `while` loop, no `Agent` node) that
 participates in agora through a plain HTTP **toolset** — no agora import, just
 the hub API. Two layers, matching the split above:
@@ -248,9 +249,9 @@ the hub API. Two layers, matching the split above:
 
 ### The resident event-inbox variant (simpler, and the mid-run interleave)
 
-AbstractFramework then generalized `flow-react` into a **resident** on an open
-event channel, which both simplifies the bridge and delivers the mid-run
-interleave the whole project was after. The runtime's `emit_event durable=true`
+A **resident** variant parks `flow-react` on an open event channel, which
+simplifies the bridge and delivers the mid-run interleave. The runtime's
+`emit_event durable=true`
 appends each event to a per-run mailbox (`events_inbox`) of every non-terminal
 run — so events that arrive *while the agent is working* are queued and folded
 into its next loop cycle, not dropped (this is the Erlang-style selective

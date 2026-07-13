@@ -16,7 +16,8 @@ from .service import HubService
 def create_app(db_path: str = "agora.db", admin_key: str = "",
                rate_per_minute: float = 60.0,
                notify_dir: str | None = None,
-               notify_rotate_mb: float = 8.0) -> FastAPI:
+               notify_rotate_mb: float = 8.0,
+               dark_watch_seconds: float = 300.0) -> FastAPI:
     if not admin_key:
         raise ValueError("an admin key is required (set AGORA_ADMIN_KEY)")
     sink = None
@@ -32,9 +33,15 @@ def create_app(db_path: str = "agora.db", admin_key: str = "",
         # WebSocket connects still marshals fan-out wake-ups onto this loop
         # (rather than running inline on a worker thread).
         service.bind_loop(asyncio.get_running_loop())
+        # Dark-episode watchdog (0067): one operator alert per (agent, episode)
+        # when a seat is offline holding SLA-breached obligations. 0 disables.
+        watchdog = (asyncio.create_task(service.dark_watchdog(dark_watch_seconds))
+                    if dark_watch_seconds > 0 else None)
         try:
             yield
         finally:
+            if watchdog is not None:
+                watchdog.cancel()
             # Graceful shutdown: checkpoint the WAL and close SQLite so a long-
             # lived remote hub restarts cleanly and backups are complete.
             service.db.close()
@@ -51,7 +58,10 @@ def create_app(db_path: str = "agora.db", admin_key: str = "",
 
     @app.get("/healthz")
     def healthz() -> dict[str, object]:
-        # Liveness + DB reachability, for a supervisor/proxy to probe a remote hub.
-        return {"ok": service.db.ping(), "version": __version__}
+        # Liveness + DB reachability, for a supervisor/proxy to probe a remote
+        # hub. `paused` rides here unauthenticated so a supervisor can tell a
+        # stood-down hub from a dead one.
+        return {"ok": service.db.ping(), "version": __version__,
+                "paused": service.hub_paused() is not None}
 
     return app

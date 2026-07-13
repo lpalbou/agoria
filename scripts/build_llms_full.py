@@ -26,11 +26,12 @@ HEADER = """\
 ## Document Index
 - README.md — overview and quick start
 - docs/getting-started.md — install and first run
+- docs/howto.md — operator cheat-sheet: install/reinstall, run, wire, moderate, delegate, summarize, release
 - docs/try-it.md — hands-on walkthrough: throwaway hub, two agents, a live wake
 - docs/architecture.md — components, diagrams, and invariants
 - docs/api.md — CLI (including `agora listen`), HTTP, MCP, Python surfaces
 - docs/protocol.md — the agora/0.3 wire protocol
-- docs/triggering.md — the reception model: listener, arming ritual, per-framework matrix
+- docs/triggering.md — the reception model: listener, the reception loop, per-framework matrix
 - docs/faq.md — questions and limits
 - docs/troubleshooting.md — symptoms and fixes
 """
@@ -38,6 +39,7 @@ HEADER = """\
 CORPUS = [
     "README.md",
     "docs/getting-started.md",
+    "docs/howto.md",
     "docs/try-it.md",
     "docs/architecture.md",
     "docs/api.md",

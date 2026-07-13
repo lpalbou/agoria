@@ -1,0 +1,4 @@
+interface:
+  display_name: "Backlog System"
+  short_description: "Build and maintain an evidence-backed engineering backlog"
+  default_prompt: "Use $backlog to design or maintain a file-backed engineering backlog with explicit lifecycle states, history, and hygiene workflows."

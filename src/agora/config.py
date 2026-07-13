@@ -76,6 +76,24 @@ def is_loopback_url(url: str) -> bool:
     return host in ("localhost", "::1") or host.startswith("127.")
 
 
+def load_llm() -> dict[str, Any]:
+    """The operator's OpenAI-compatible summarizer endpoint, or {}. Shape:
+    {"base_url": "...", "api_key": "...", "model": "..."}. Lives in
+    config.json (0600) — this is a LOCAL operator convenience, never sent to
+    the hub (the hub makes no LLM calls and holds no provider keys)."""
+    llm = load_config().get("llm")
+    return llm if isinstance(llm, dict) else {}
+
+
+def save_llm(base_url: str, api_key: str, model: str) -> None:
+    """Merge the summarizer endpoint into config.json, preserving url/admin
+    key/db path. Clamped 0600 — it carries a provider api_key."""
+    cfg = load_config()
+    cfg["llm"] = {"base_url": base_url.rstrip("/"), "api_key": api_key,
+                  "model": model}
+    _write_secret(_config_path(), json.dumps(cfg, indent=2))
+
+
 def _load_keys() -> dict[str, str]:
     p = _keys_path()
     return json.loads(p.read_text()) if p.exists() else {}

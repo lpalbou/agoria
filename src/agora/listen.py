@@ -26,6 +26,19 @@ from . import config as _config
 DEFAULT_DEBOUNCE = 15.0
 DEFAULT_HEARTBEAT = 300.0
 _CHANNEL_CAP = 6                       # the wake line stays one short line, always
+
+# Adaptive reception (resource-efficient idle backoff): with --adaptive the
+# per-call --max-wait CEILING is chosen by the tool, not the agent, and
+# persisted per-seat in listen-<id>.backoff. Because --max-wait is a ceiling
+# (a message returns the instant it lands, never at the deadline), widening
+# the idle window costs ZERO message latency — it only removes empty loop
+# iterations (each = one agent inference). Snap to MIN on a wake so an active
+# exchange re-checks tightly; ×2 on each empty timeout up to the cap.
+ADAPT_MIN = 60.0                       # tightest window (active): "down to 1mn"
+ADAPT_FACTOR = 2.0                     # 60→120→240→480→960→cap: 5-6 idle steps
+ADAPT_CAP_DEFAULT = 1200.0             # 20 min; --max-wait overrides the cap
+_HUB_UNREACHABLE = 3                   # internal: ws arm gave up (hub down) — do
+#                                        NOT widen on it, and map to exit 0
 _IMPORTANT_FLAGS = {"to-me", "reply-to-me", "critical", "escalated"}
 _FLAG_ORDER = ("to-me", "reply-to-me", "open", "blocked", "critical", "escalated", "dm")
 
@@ -68,17 +81,55 @@ ARM_BANNER = (
     'and re-arm WITH the monitor (see the ARMING RITUAL in your agora rule).')
 
 
-def _announce_armed(source: str, agent_id: str, hub: str, *, once: bool) -> None:
+def _announce_armed(source: str, agent_id: str, hub: str, *, once: bool,
+                    window: float | None = None) -> None:
     """The arming moment: the monitor warning on stderr FIRST, then the
     machine-readable `armed` sentinel on stdout — the order the arming
     ritual's self-check relies on (the warning is already in the shell output
     an agent reads when it verifies the armed line). --once keeps stderr for
     the digest alone: that stream IS the wake payload Claude reads
     (asyncRewake shows stderr to the model), its exit-2 wake needs no output
-    monitor, and the timeout path is contractually silent."""
+    monitor, and the timeout path is contractually silent. `window` (the
+    adaptive ceiling in seconds) is appended so the operator and the agent's
+    own shell can see the chosen idle window."""
     if not once:
         print(ARM_BANNER, file=sys.stderr, flush=True)
-    _emit(f"AGORA_LISTEN armed source={source} agent={agent_id} hub={hub}")
+    tail = f" window={int(window)}" if window is not None else ""
+    _emit(f"AGORA_LISTEN armed source={source} agent={agent_id} hub={hub}{tail}")
+
+
+def read_backoff(path: Path, cap: float) -> float:
+    """The ceiling to use on THIS call, from the per-seat backoff file. Read
+    defensively: missing/corrupt/out-of-range clamps into [MIN, cap] and
+    defaults to MIN — corruption always fails toward MORE checks (lower
+    latency), never toward deafness. No clock is consulted, so a stale file
+    can never mislead the math (only a wake or a clean timeout changes it)."""
+    try:
+        ceiling = float(json.loads(path.read_text()).get("ceiling", ADAPT_MIN))
+    except (OSError, ValueError, TypeError, AttributeError):
+        ceiling = ADAPT_MIN
+    return max(ADAPT_MIN, min(ceiling, cap))
+
+
+def next_backoff(current: float, rc: int, cap: float) -> float:
+    """The ceiling to persist for the NEXT call. Wake (exit 2) snaps to MIN;
+    a clean idle timeout (exit 0) widens ×FACTOR up to the cap; anything else
+    (signal, hub-unreachable, error) leaves it unchanged — only a genuine
+    'nothing happened for the whole window' earns a widen."""
+    if rc == 2:
+        return ADAPT_MIN
+    if rc == 0:
+        return max(ADAPT_MIN, min(current * ADAPT_FACTOR, cap))
+    return max(ADAPT_MIN, min(current, cap))
+
+
+def write_backoff(path: Path, ceiling: float) -> None:
+    """Persist the next ceiling atomically (tmp + os.replace) so a crash mid
+    write never leaves a torn file the next read would reject."""
+    tmp = path.with_suffix(".backoff.tmp")
+    with contextlib.suppress(OSError):
+        tmp.write_text(json.dumps({"ceiling": ceiling, "updated": int(time.time())}))
+        os.replace(tmp, path)
 
 
 def resolve_identity(agent_id: str | None, url: str | None, cwd: Path) -> tuple[str, str]:
@@ -268,8 +319,11 @@ class ListenSignal(BaseException):
 
 
 def arm_signals() -> None:
-    """SIGTERM/SIGINT -> ListenSignal, so every exit path can emit
-    `ended reason=signal` and clean up. Best-effort (main thread only)."""
+    """SIGTERM/SIGINT/SIGHUP -> ListenSignal, so every exit path can emit
+    `ended reason=signal`, run the finally, and release the pidfile/lock.
+    SIGHUP matters here: a closed terminal (harness teardown) delivers HUP,
+    and without it the listener would skip its cleanup and leave a stale
+    lock behind. Best-effort (main thread only)."""
     import signal
 
     def _raise(signum, frame):  # noqa: ARG001
@@ -277,6 +331,8 @@ def arm_signals() -> None:
     with contextlib.suppress(ValueError):  # not the main thread (in-process tests)
         signal.signal(signal.SIGTERM, _raise)
         signal.signal(signal.SIGINT, _raise)
+        with contextlib.suppress(AttributeError):  # SIGHUP is POSIX-only
+            signal.signal(signal.SIGHUP, _raise)
 
 
 def _heartbeat(pid_path: Path) -> None:
@@ -333,7 +389,7 @@ def run_file_mode(path: Path, agent_id: str, hub_url: str, pid_path: Path, *,
                   once: bool = False, max_wait: float | None = None,
                   debounce: float = DEFAULT_DEBOUNCE, important_only: bool = False,
                   preview: bool = False, poll: float = 0.5,
-                  heartbeat: float = DEFAULT_HEARTBEAT,
+                  heartbeat: float = DEFAULT_HEARTBEAT, window: float | None = None,
                   stop: Callable[[], bool] = lambda: False) -> int:
     try:
         fh = open(path, "rb")
@@ -341,7 +397,7 @@ def run_file_mode(path: Path, agent_id: str, hub_url: str, pid_path: Path, *,
         _emit("AGORA_LISTEN ended reason=no-notify-file")
         return 1  # forced file mode with nothing to tail must fail LOUDLY
     fh.seek(0, os.SEEK_END)  # attach point: no history replay, ever
-    _announce_armed("file", agent_id, hub_url, once=once)
+    _announce_armed("file", agent_id, hub_url, once=once, window=window)
     batcher, last_beat = DebounceBatcher(debounce), time.monotonic()
     deadline = (time.monotonic() + max_wait) if (once and max_wait is not None) else None
     # closing(): the early returns below (--once wake, --max-wait deadline)
@@ -373,7 +429,8 @@ async def run_ws_mode(url: str, key: str, agent_id: str, pid_path: Path, *,
                       once: bool = False, max_wait: float | None = None,
                       debounce: float = DEFAULT_DEBOUNCE, important_only: bool = False,
                       preview: bool = False, notify_file: str | None = None,
-                      heartbeat: float = DEFAULT_HEARTBEAT) -> int:
+                      heartbeat: float = DEFAULT_HEARTBEAT,
+                      window: float | None = None) -> int:
     from .client import AgoraClient
     from .client.client import AgoraError  # not re-exported by the package
     from .hub.notify_sink import notify_line
@@ -402,10 +459,10 @@ async def run_ws_mode(url: str, key: str, agent_id: str, pid_path: Path, *,
                                      f"'{agent_id}' ({exc}); fix ~/.agora/keys.json") from exc
                 if deadline is not None and time.monotonic() >= deadline:
                     _emit("AGORA_LISTEN ended reason=hub-unreachable")
-                    return 0
+                    return _HUB_UNREACHABLE  # exit 0, but never widen on it
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, 5.0)
-        _announce_armed("ws", agent_id, url, once=once)
+        _announce_armed("ws", agent_id, url, once=once, window=window)
         if heartbeat > 0:
             async def _beats() -> None:
                 while True:
@@ -444,17 +501,34 @@ def run_listen(*, agent_id: str | None = None, url: str | None = None,
                debounce: float = DEFAULT_DEBOUNCE, important_only: bool = False,
                preview: bool = False, notify_file: str | None = None,
                lock: str | None = None, heartbeat: float = DEFAULT_HEARTBEAT,
-               poll: float = 0.5, cwd: Path | None = None) -> int:
+               poll: float = 0.5, adaptive: bool = False,
+               cwd: Path | None = None) -> int:
     aid, hub = resolve_identity(agent_id, url, Path(cwd) if cwd else Path.cwd())
     home = _config.home()
     src = resolve_source(source, hub, home, aid)
     lock_path = Path(lock).expanduser() if lock else home / f"listen-{aid}.lock"
     pid_path = home / f"listen-{aid}.pid"
-    if not acquire_lock(lock_path):
+    backoff_path = home / f"listen-{aid}.backoff"
+    # The lock exists to keep TWO PERSISTENT listeners from double-waking a
+    # session — that is its only job. A --once reception-loop call needs no
+    # lock: file mode is read-only tailing, so a harness-orphaned prior call
+    # is harmless (it delivers to a dead terminal), and locking made the LIVE
+    # iteration bounce `already-armed` while the orphan held the lock — the
+    # starvation the fleet hit. So --once locks ONLY when a lock path is passed
+    # explicitly (Claude's hook-armed single-shots do, to dedup duplicate hook
+    # firings); the Cursor reception loop passes none and never contends.
+    want_lock = (not once) or (lock is not None)
+    if want_lock and not acquire_lock(lock_path):
         _emit("AGORA_LISTEN ended reason=already-armed")
         return 0  # idempotent arming: the live instance keeps its lock/pidfile
-    shared = dict(once=once, max_wait=max_wait, debounce=debounce,
-                  important_only=important_only, preview=preview, heartbeat=heartbeat)
+    # Adaptive: the per-call ceiling comes from the backoff file (--max-wait is
+    # the cap, default 20 min). A message returns the instant it lands, so a
+    # wide idle window adds no latency — only fewer empty inferences.
+    cap = max_wait if (adaptive and max_wait) else ADAPT_CAP_DEFAULT
+    effective_wait = read_backoff(backoff_path, cap) if adaptive else max_wait
+    shared = dict(once=once, max_wait=effective_wait, debounce=debounce,
+                  important_only=important_only, preview=preview,
+                  heartbeat=heartbeat, window=effective_wait if adaptive else None)
     try:
         # Everything after the lock is acquired lives inside the try: a failure
         # as early as the pidfile write must still release the lock in the
@@ -463,11 +537,18 @@ def run_listen(*, agent_id: str | None = None, url: str | None = None,
         arm_signals()
         pid_path.write_text(str(os.getpid()))
         if src == "file":
-            return run_file_mode(home / f"{aid}-inbox.log", aid, hub, pid_path,
-                                 poll=poll, **shared)
-        key = _config.resolve_key(hub, aid)  # cached, else self-register, else exit 1
-        return asyncio.run(run_ws_mode(hub, key, aid, pid_path,
-                                       notify_file=notify_file, **shared))
+            rc = run_file_mode(home / f"{aid}-inbox.log", aid, hub, pid_path,
+                               poll=poll, **shared)
+        else:
+            key = _config.resolve_key(hub, aid)  # cached, else self-register, else exit 1
+            rc = asyncio.run(run_ws_mode(hub, key, aid, pid_path,
+                                         notify_file=notify_file, **shared))
+        # Persist the next ceiling BEFORE mapping the internal code: a wake
+        # (2) snaps to MIN, a clean idle timeout (0) widens, unreachable (3)
+        # leaves it be. Only reached on a normal return — a signal skips it.
+        if adaptive:
+            write_backoff(backoff_path, next_backoff(effective_wait, rc, cap))
+        return 0 if rc == _HUB_UNREACHABLE else rc
     except ListenSignal:
         _emit("AGORA_LISTEN ended reason=signal")
         return 0
@@ -491,6 +572,14 @@ def run_listen(*, agent_id: str | None = None, url: str | None = None,
             _emit("AGORA_LISTEN ended reason=error")
         raise
     finally:
-        for path in (pid_path, lock_path):
+        # Without the lock, concurrent --once tailers share the pidfile: a
+        # harness-orphaned prior call must NOT unlink the live one's pidfile
+        # on its way out (that would blank `agora status` for a live seat), so
+        # remove it only if it still holds OUR pid. The lock is only ours to
+        # remove when we actually acquired it.
+        with contextlib.suppress(OSError):
+            if _read_lock_pid(pid_path) == os.getpid():
+                pid_path.unlink()
+        if want_lock:
             with contextlib.suppress(OSError):
-                path.unlink()
+                lock_path.unlink()

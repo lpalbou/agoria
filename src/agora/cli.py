@@ -20,6 +20,7 @@ import os
 import secrets
 import shutil
 import sys
+import time
 from pathlib import Path
 
 from . import config as _config
@@ -156,10 +157,12 @@ def cmd_setup_cursor(args: argparse.Namespace) -> None:
         sys.exit(f"workspace not found: {workspace}")
     url = _hub_url(args)  # honors $AGORA_URL (the silent-127.0.0.1 trap fix)
     api_key = _setup_key(url, args.agent, args.about or "", args.key)
+    headless = getattr(args, "headless", False)
     written = setup_cursor(workspace, args.agent, url, args.about or "",
                            _resolve_mcp_command(), args.with_hook,
-                           api_key=api_key)
-    print(f"configured '{workspace.name}' as agora agent '{args.agent}' (Cursor):")
+                           api_key=api_key, headless=headless)
+    kind = "Cursor, headless" if headless else "Cursor"
+    print(f"configured '{workspace.name}' as agora agent '{args.agent}' ({kind}):")
     for path in written:
         print(f"  wrote {path}")
     if api_key:
@@ -316,6 +319,91 @@ def cmd_rules(args: argparse.Namespace) -> None:
     print(payload["text"])
 
 
+def cmd_pause(args: argparse.Namespace) -> None:
+    """Operator verb: pause the hub (agents stand down; reads/acks stay open;
+    obligation clocks freeze) or resume it. No TTL — resume is explicit."""
+    import httpx
+
+    url = _hub_url(args)
+    admin = _admin_key_or_exit(args, url)
+    headers = {"Authorization": f"Bearer {admin}"}
+    if args.pause_action == "resume":
+        r = httpx.delete(f"{url}/admin/pause", headers=headers, timeout=10.0)
+        if r.status_code != 200:
+            sys.exit(f"resume failed: {r.status_code} {r.text}")
+        print("hub resumed — announced in every channel; obligation clocks "
+              "were frozen for the pause")
+        return
+    r = httpx.put(f"{url}/admin/pause", headers=headers,
+                  json={"reason": args.reason or ""}, timeout=10.0)
+    if r.status_code != 200:
+        sys.exit(f"pause failed: {r.status_code} {r.text}")
+    state = r.json()
+    print(f"hub paused (since={time.strftime('%H:%M', time.localtime(state['since']))}"
+          f"{', reason: ' + state['reason'] if state.get('reason') else ''}) — "
+          "agents get 423 on writes; reads/acks stay open; `agora resume` to lift")
+
+
+def cmd_delegate(args: argparse.Namespace) -> None:
+    """Operator verb: grant, list, or revoke delegation — authority as
+    verifiable hub state (whoami lists it; prose claims count for nothing).
+    Powers: ruling (sign-offs), operational (restarts etc.), reporting
+    (board curation / queue rows), moderation (kick/ban to protect the
+    collaboration — cannot target operators or other delegates). Grants
+    expire (default 7d, cap 30d)."""
+    import httpx
+
+    from .join import parse_ttl
+
+    if getattr(args, "charter", False):
+        # The role brief to hand the delegate — no hub call, no admin key.
+        from .governance import DELEGATE_CHARTER
+        print(DELEGATE_CHARTER)
+        return
+
+    url = _hub_url(args)
+    admin = _admin_key_or_exit(args, url)
+    headers = {"Authorization": f"Bearer {admin}"}
+    if args.list:
+        r = httpx.get(f"{url}/admin/delegations", headers=headers, timeout=10.0)
+        if r.status_code != 200:
+            sys.exit(f"listing delegations failed: {r.status_code} {r.text}")
+        rows = r.json()
+        if not rows:
+            print("no active delegations")
+            return
+        for d in rows:
+            until = time.strftime("%Y-%m-%d %H:%M", time.localtime(d["expires_at"]))
+            note = f"  — {d['note']}" if d.get("note") else ""
+            print(f"{d['agent_id']:<16} {'+'.join(d['powers']):<32} until {until}{note}")
+        return
+    if args.revoke:
+        r = httpx.delete(f"{url}/admin/delegation/{args.revoke}",
+                         headers=headers, timeout=10.0)
+        if r.status_code != 200:
+            sys.exit(f"revoke failed: {r.status_code} {r.text}")
+        print(f"delegation revoked: {args.revoke}"
+              if r.json()["revoked"] else f"no active delegation for {args.revoke}")
+        return
+    if not args.agent or not args.powers:
+        sys.exit("usage: agora delegate AGENT --powers ruling,reporting "
+                 "[--ttl 7d] [--note TEXT]   (or --list / --revoke AGENT)")
+    try:
+        ttl = parse_ttl(args.ttl) if args.ttl else None
+    except ValueError as e:
+        sys.exit(str(e))
+    r = httpx.put(f"{url}/admin/delegation", headers=headers, timeout=10.0,
+                  json={"agent_id": args.agent,
+                        "powers": [p.strip() for p in args.powers.split(",") if p.strip()],
+                        "ttl_seconds": ttl, "note": args.note or ""})
+    if r.status_code != 200:
+        sys.exit(f"delegation failed: {r.status_code} {r.text}")
+    g = r.json()
+    until = time.strftime("%Y-%m-%d %H:%M", time.localtime(g["expires_at"]))
+    print(f"delegated {'+'.join(g['powers'])} to {g['agent_id']} until {until} "
+          "(announced in hub-alerts; visible in every whoami)")
+
+
 def cmd_register(args: argparse.Namespace) -> None:
     """Operator verb: mint ONE agent's key on the hub, printing it exactly
     once. Deliberately does NOT cache it locally — the key belongs to the
@@ -403,6 +491,95 @@ def _run_agent_cmd(args: argparse.Namespace, coro_fn) -> None:
 def cmd_whoami(args):
     async def go(c, a):
         print(json.dumps(await c.whoami(), indent=2))
+    _run_agent_cmd(args, go)
+
+
+def cmd_board(args):
+    """The --as agent's decision board: what waits on them, what is queued
+    for them, what the room is working on, what awaits review, what is done.
+    One derivation (GET /board) — this just renders it."""
+    async def go(c, a):
+        b = await c.board()
+        counts = b["counts"]
+        print(f"# board for {b['viewer']} — {counts['pending_on_me']} pending on you · "
+              f"{counts['queue']} queued · {counts['proposals']} proposals · "
+              f"{counts['in_progress']} in progress · {counts['pending_review']} awaiting review")
+        if b["pending_on_me"]:
+            print("\n## pending on you (decide or answer)")
+            for r in b["pending_on_me"]:
+                esc = " ESCALATED" if r["escalated"] else ""
+                asks = f" asks:{','.join(r['pending_asks'])}" if r["pending_asks"] else ""
+                print(f"  {r['channel']}#{r['seq']} from {r['from']} "
+                      f"({r['age_minutes']:.0f}m{esc}{asks}) — {r['q'][:100]}")
+        if b["queue"]:
+            print("\n## queued for you (curated)")
+            for r in b["queue"]:
+                tier = f" [{r['tier']}]" if r.get("tier") else ""
+                print(f"  {r['channel']}:{r['key']}{tier} — {r['q'][:100]}")
+                for opt in r.get("options", []):
+                    print(f"      option: {opt}")
+                if r.get("default"):
+                    print(f"      if you do nothing: {r['default']}")
+        if b["proposals"]:
+            print("\n## proposals (unaddressed open questions)")
+            for r in b["proposals"][:15]:
+                print(f"  {r['channel']}#{r['seq']} from {r['from']} — {r['q'][:100]}")
+        if b["in_progress"]:
+            print("\n## in progress (claims)")
+            for r in b["in_progress"]:
+                print(f"  {r['channel']} {r['task']} — {r['owner']}")
+        if b["pending_review"]:
+            print("\n## pending review")
+            for r in b["pending_review"]:
+                print(f"  {r['channel']} {r['task']} — review: {r['review']}")
+        if b["done"]:
+            print(f"\n## done (decisions, {counts['done_shown']}/{counts['done_total']})")
+            for d in b["done"]:
+                print(f"  {d['channel']} {d['key']} v{d['version']} by {d['updated_by']}")
+    _run_agent_cmd(args, go)
+
+
+def cmd_llm(args):
+    """Configure (or show) the OpenAI-compatible endpoint the summarizer uses.
+    Local operator convenience: stored 0600 in ~/.agora/config.json, never
+    sent to the hub (the hub makes no LLM calls)."""
+    if not (args.base_url or args.model or args.api_key):
+        llm = _config.load_llm()
+        if not llm:
+            print("no summarizer endpoint configured. Set one:\n"
+                  "  agora llm --base-url https://api.openai.com/v1 "
+                  "--model gpt-4o-mini --api-key sk-...")
+            return
+        key = llm.get("api_key")
+        shown = (key[:6] + "…") if key else "(none)"
+        print(f"summarizer endpoint:\n  base_url: {llm.get('base_url')}\n"
+              f"  model:    {llm.get('model')}\n  api_key:  {shown}")
+        return
+    cur = _config.load_llm()
+    base = args.base_url or cur.get("base_url", "")
+    model = args.model or cur.get("model", "")
+    key = args.api_key if args.api_key is not None else cur.get("api_key", "")
+    if not base or not model:
+        sys.exit("need both --base-url and --model (once); --api-key optional "
+                 "for keyless local endpoints")
+    _config.save_llm(base, key, model)
+    print(f"summarizer endpoint saved (0600): {base} · model {model}")
+
+
+def cmd_summarize(args):
+    """Fold a slice of the hub into a written summary via the configured
+    endpoint. Scope: whole hub (default), --channel C, or --agent ID."""
+    from .summarize import SummarizerError, summarize
+
+    llm = _config.load_llm()
+
+    async def go(c, a):
+        c.agent_id = a.as_agent            # viewer id (for agent-scope DM lookup)
+        try:
+            text = await summarize(c, llm, channel=a.channel, agent=a.agent)
+        except SummarizerError as exc:
+            raise SystemExit(str(exc)) from exc
+        print(text)
     _run_agent_cmd(args, go)
 
 
@@ -899,6 +1076,13 @@ def _listener_state(home: Path, agent_id: str) -> str:
     except (OSError, ValueError):
         return "-"
     if pid > 0 and pid_alive(pid) and (_time.time() - mtime) <= 2 * DEFAULT_HEARTBEAT:
+        # Surface the adaptive idle window when the seat runs one, so the
+        # operator can see a seat that has widened out to a long window.
+        with contextlib.suppress(OSError, ValueError, TypeError):
+            import json as _json
+            ceiling = _json.loads(
+                (Path(home) / f"listen-{agent_id}.backoff").read_text())["ceiling"]
+            return f"armed:{int(ceiling)}s"
         return "armed"
     return "STALE"
 
@@ -909,12 +1093,15 @@ def cmd_listen(args: argparse.Namespace) -> None:
     only the argparse<->function seam."""
     from .listen import run_listen
 
+    if args.adaptive and not args.once:
+        sys.exit("agora listen: --adaptive requires --once (it tunes the "
+                 "per-call --max-wait ceiling the reception loop re-invokes)")
     sys.exit(run_listen(
         agent_id=args.as_agent, url=args.url, source=args.source, once=args.once,
         max_wait=args.max_wait, debounce=args.debounce,
         important_only=args.important_only, preview=args.preview,
         notify_file=args.notify_file, lock=args.lock, heartbeat=args.heartbeat,
-        poll=args.poll))
+        poll=args.poll, adaptive=args.adaptive))
 
 
 def cmd_status(args: argparse.Namespace) -> None:
@@ -984,6 +1171,10 @@ def build_parser() -> argparse.ArgumentParser:
     """The full argparse tree, separate from main() so tests can parse
     argv lists without executing commands."""
     p = argparse.ArgumentParser(prog="agora", description="agora control")
+    from . import __version__
+    p.add_argument("--version", action="version",
+                   version=f"agora {__version__}",
+                   help="print the installed agora version and exit")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     up = sub.add_parser("up", help="start the hub with persistent defaults")
@@ -1013,6 +1204,11 @@ def build_parser() -> argparse.ArgumentParser:
     sc.add_argument("--with-hook", action=argparse.BooleanOptionalAction,
                     default=True,
                     help="install the wake stop-hook (default: on; --no-hook to skip)")
+    sc.add_argument("--headless", action="store_true",
+                    help="dedicated seat (no human sharing the tab): the "
+                         "reception loop widens its idle window to 1200s to "
+                         "save inferences (~15/hr/seat -> ~3). Do NOT use for a "
+                         "human-shared tab — a long window delays typed prompts")
     sc.set_defaults(func=cmd_setup_cursor)
 
     scl = sub.add_parser("setup-claude", help="wire a workspace as a Claude Code agent")
@@ -1051,6 +1247,37 @@ def build_parser() -> argparse.ArgumentParser:
                     help="print the raw registration response (scripting)")
     rg.set_defaults(func=cmd_register)
 
+    dg = sub.add_parser("delegate", help="grant/list/revoke delegation "
+                                         "(verifiable hub state; powers: "
+                                         "ruling,operational,reporting,moderation)")
+    dg.add_argument("agent", nargs="?", default=None)
+    dg.add_argument("--powers", default=None,
+                    help="comma-separated subset of "
+                         "ruling,operational,reporting,moderation")
+    dg.add_argument("--ttl", default=None, help="e.g. 7d, 48h (default 7d, cap 30d)")
+    dg.add_argument("--note", default="", help="shown in the grant announcement")
+    dg.add_argument("--list", action="store_true", help="list active delegations")
+    dg.add_argument("--charter", action="store_true",
+                    help="print the delegate role brief to hand the agent "
+                         "(read decisions before ruling, keep a running summary)")
+    dg.add_argument("--revoke", default=None, metavar="AGENT")
+    dg.add_argument("--url", default=None)
+    dg.add_argument("--admin-key", dest="admin_key", default=None)
+    dg.set_defaults(func=cmd_delegate)
+
+    pa = sub.add_parser("pause", help="pause the hub: agents stand down "
+                                      "(writes 423; reads/acks open; SLA "
+                                      "clocks freeze) until `agora resume`")
+    pa.add_argument("--reason", default="", help="shown to agents in the refusal")
+    pa.add_argument("--url", default=None)
+    pa.add_argument("--admin-key", dest="admin_key", default=None)
+    pa.set_defaults(func=cmd_pause, pause_action="pause")
+
+    rs = sub.add_parser("resume", help="lift the operator pause")
+    rs.add_argument("--url", default=None)
+    rs.add_argument("--admin-key", dest="admin_key", default=None)
+    rs.set_defaults(func=cmd_pause, pause_action="resume")
+
     ru = sub.add_parser("rules",
                         help="show or replace the hub rules served to every "
                              "agent via whoami (operator; --set FILE)")
@@ -1060,6 +1287,16 @@ def build_parser() -> argparse.ArgumentParser:
     ru.add_argument("--admin-key", dest="admin_key", default=None,
                     help="admin key (default: $AGORA_ADMIN_KEY, then config.json)")
     ru.set_defaults(func=cmd_rules)
+
+    lm = sub.add_parser("llm",
+                        help="configure (or show) the OpenAI-compatible endpoint "
+                             "`agora summarize` / chat `/summary` use (local, 0600)")
+    lm.add_argument("--base-url", dest="base_url", default=None,
+                    help="e.g. https://api.openai.com/v1 or a local gateway")
+    lm.add_argument("--model", default=None, help="model name, e.g. gpt-4o-mini")
+    lm.add_argument("--api-key", dest="api_key", default=None,
+                    help="provider key (omit for keyless local endpoints)")
+    lm.set_defaults(func=cmd_llm)
 
     sk = sub.add_parser("seed-key",
                         help="import an operator-minted agent key into this "
@@ -1087,7 +1324,13 @@ def build_parser() -> argparse.ArgumentParser:
                          "on stderr (the Claude asyncRewake contract)")
     ln.add_argument("--max-wait", dest="max_wait", type=float, default=None,
                     help="--once: exit 0 silently after S seconds without a wake "
-                         "(default: wait forever)")
+                         "(default: wait forever); with --adaptive, the CAP")
+    ln.add_argument("--adaptive", action="store_true",
+                    help="--once: the tool picks each window itself — 60s when "
+                         "active, widening x2 to the --max-wait cap (default "
+                         "1200s) when idle; state in listen-<id>.backoff. A "
+                         "message returns instantly regardless, so wide idle "
+                         "windows cost no latency, only fewer empty inferences")
     ln.add_argument("--debounce", type=float, default=15.0,
                     help="coalesce a burst into ONE wake sentinel (default 15s)")
     ln.add_argument("--important-only", dest="important_only", action="store_true",
@@ -1118,7 +1361,17 @@ def build_parser() -> argparse.ArgumentParser:
         return sp
 
     _agent_parser("whoami", "print your identity").set_defaults(func=cmd_whoami)
+    _agent_parser("board", "your decision board: pending on you, queued, "
+                           "in progress, awaiting review, done").set_defaults(func=cmd_board)
     _agent_parser("channels", "list channels").set_defaults(func=cmd_channels)
+
+    sm = _agent_parser("summarize", "LLM summary of the hub from your view "
+                                    "(default), or --channel C / --agent ID")
+    sm.add_argument("--channel", default=None, help="scope to one channel")
+    sm.add_argument("--agent", default=None, metavar="AGENT_ID",
+                    help="scope to everything about one peer (your DM + their "
+                         "activity in your shared channels)")
+    sm.set_defaults(func=cmd_summarize)
 
     cc = _agent_parser("create-channel",
                        "create a channel (the --as agent becomes owner)")

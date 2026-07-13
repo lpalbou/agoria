@@ -1,6 +1,6 @@
-"""Obligation discharge: is an open/blocked message answered yet?
+"""Obligation discharge and closure: is an open/blocked message settled yet?
 
-Two modes, chosen by the message itself:
+Two DISCHARGE modes, chosen by the message itself:
 
 - **binary** (legacy / no structured asks): any reply from someone other than
   the asker discharges the obligation. This is the original behavior and is
@@ -12,6 +12,17 @@ Two modes, chosen by the message itself:
   no longer silently clears the whole message (the partial-answer rot the
   file protocol suffered). This is the agents' unanimous top request, made
   mechanical: importance follows unanswered asks, not a sender's say-so.
+
+CLOSURE (backlog 0062, ADR-0003) is the second, orthogonal way a thread
+settles: a `resolved`-status reply closes the obligation on EVERY surface
+(inbox stickiness, escalation, digest) when its author has the authority to
+close — the ASKER (closing your own question is loud, attributed and
+in-thread, unlike the silent self-answering the non-sender rule exists to
+prevent), an OPERATOR, or ANY member whose resolved reply carries a
+`settled_by` pointer naming the message that settled the question (the
+audited supersession path for rulings that landed outside the thread — the
+c713/c726 incident class). A third party's bare resolved reply deliberately
+does NOT close: closure by strangers needs the pointer's audit trail.
 
 Pure functions over already-loaded messages, so they are trivially testable and
 carry no transport or storage concerns.
@@ -30,6 +41,8 @@ class DischargeState:
     pending: list[str] = field(default_factory=list)   # unanswered ask ids
     answered: list[str] = field(default_factory=list)  # answered ask ids
     discharged: bool = False                   # obligation fully satisfied?
+    closed: bool = False                       # discharged OR authoritatively resolved
+    has_resolved_reply: bool = False           # any resolved reply exists (reader signal)
 
     @property
     def total(self) -> int:
@@ -55,17 +68,37 @@ def _answers_of(message: Message) -> list[str]:
     return [str(a) for a in ans] if isinstance(ans, list) else []
 
 
-def discharge_state(parent: Message, replies: list[Message]) -> DischargeState:
-    """Compute whether `parent`'s obligation is discharged given its replies.
+def _closes(parent: Message, reply: Message, operators: frozenset[str]) -> bool:
+    """Does this resolved reply carry closure AUTHORITY (ADR-0003)?
+    Asker: always (their own question, closed in the open). Operator: always.
+    Anyone else: only with a `settled_by` supersession pointer (validated at
+    post time to name a real message in the channel)."""
+    if reply.status.value != "resolved":
+        return False
+    if reply.sender == parent.sender or reply.sender in operators:
+        return True
+    return bool((reply.data or {}).get("settled_by"))
 
-    A reply from the asker itself never discharges the asker's own obligation
-    (you cannot answer your own question to silence it) — matching the existing
-    `has_reply(exclude_sender=...)` rule.
+
+def discharge_state(parent: Message, replies: list[Message],
+                    operators: frozenset[str] = frozenset()) -> DischargeState:
+    """Compute whether `parent`'s obligation is discharged and/or closed.
+
+    A reply from the asker itself never DISCHARGES the asker's own obligation
+    (you cannot quietly answer your own question to silence it) — but the
+    asker's `resolved` reply CLOSES it: closure is a loud, attributed,
+    in-thread act, re-openable by anyone posting a new ask. `operators` is
+    the set of operator agent ids (their resolved replies also close).
     """
     non_sender = [r for r in replies if r.sender != parent.sender]
+    has_resolved = any(r.status.value == "resolved" for r in replies)
+    closed_by_resolve = any(_closes(parent, r, operators) for r in replies)
     asks = asks_of(parent)
     if not asks:
-        return DischargeState(mode="binary", discharged=bool(non_sender))
+        discharged = bool(non_sender)
+        return DischargeState(mode="binary", discharged=discharged,
+                              closed=discharged or closed_by_resolve,
+                              has_resolved_reply=has_resolved)
     answered_ids: set[str] = set()
     for r in non_sender:
         answered_ids.update(_answers_of(r))
@@ -73,4 +106,6 @@ def discharge_state(parent: Message, replies: list[Message]) -> DischargeState:
     pending = [i for i in ids if i not in answered_ids]
     answered = [i for i in ids if i in answered_ids]
     return DischargeState(mode="asks", pending=pending, answered=answered,
-                          discharged=not pending)
+                          discharged=not pending,
+                          closed=not pending or closed_by_resolve,
+                          has_resolved_reply=has_resolved)

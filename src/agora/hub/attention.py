@@ -57,15 +57,21 @@ class AttentionPolicy:
     def envelope_for(self, viewer_id: str, message: Message, *,
                      parent_sender: str | None, has_reply: bool,
                      pending_asks: list[str] | None = None, ask_total: int = 0,
-                     sla_minutes: float = DEFAULT_RESPONSE_SLA_MINUTES) -> Envelope:
-        # `has_reply` here means "obligation discharged" — for a structured-asks
-        # message that is true only when every ask is answered, so a partial
-        # answer keeps the message escalating/pinned.
+                     has_resolved_reply: bool = False,
+                     sla_minutes: float = DEFAULT_RESPONSE_SLA_MINUTES,
+                     paused_seconds: float = 0.0) -> Envelope:
+        # `has_reply` here means "obligation CLOSED" (discharged, or an
+        # authoritative resolved reply — ADR-0003): for a structured-asks
+        # message a partial answer keeps it escalating/pinned, while a proper
+        # closure stops escalation on the spot. `has_resolved_reply` is the
+        # reader's context signal ("this thread carries a resolved reply —
+        # check before answering"), independent of whether it closed.
         to_me = viewer_id in message.to
         reply_to_me = parent_sender == viewer_id if parent_sender else False
         body_bytes = len(message.body.encode())
         inline = self._should_inline(message, to_me, reply_to_me, body_bytes)
-        effective, escalated = self._effective_urgency(message, viewer_id, has_reply, sla_minutes)
+        effective, escalated = self._effective_urgency(
+            message, viewer_id, has_reply, sla_minutes, paused_seconds)
         pending = pending_asks or []
         answered = max(ask_total - len(pending), 0)
         return Envelope(
@@ -80,6 +86,7 @@ class AttentionPolicy:
             reply_to=message.reply_to,
             pending_asks=pending,
             ask_progress=f"{answered}/{ask_total}" if ask_total else "",
+            has_resolved_reply=has_resolved_reply,
             # Reserved authorship shape (present on every envelope so consumers
             # can bind to it now); echo the sender's token, attest nothing yet.
             signature=(message.data or {}).get("signature"),
@@ -98,14 +105,17 @@ class AttentionPolicy:
 
     @staticmethod
     def _effective_urgency(message: Message, viewer_id: str, has_reply: bool,
-                           sla_minutes: float) -> tuple[Urgency, bool]:
+                           sla_minutes: float,
+                           paused_seconds: float = 0.0) -> tuple[Urgency, bool]:
         if message.critical:
             return Urgency.interrupt, False
+        # `paused_seconds` excludes operator-pause time from the obligation's
+        # age: the SLA clock measures time the fleet could actually respond.
         is_rotting_obligation = (
             message.status in (Status.open, Status.blocked)
             and message.sender != viewer_id
             and not has_reply
-            and (time.time() - message.created_at) > sla_minutes * 60.0
+            and (time.time() - message.created_at - paused_seconds) > sla_minutes * 60.0
         )
         if is_rotting_obligation and message.urgency != Urgency.interrupt:
             return Urgency.interrupt, True

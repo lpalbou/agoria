@@ -61,8 +61,8 @@ agora dm --as ping --to pong --title "pre-arm" "sent before the listener existed
 ```
 
 That pre-arm message waits in `pong`'s durable inbox. The listener you are
-about to start will *not* replay it — which is exactly why the arming ritual
-orders "arm first, THEN check the inbox": anything older is already in the
+about to start will *not* replay it — which is exactly why the reception
+loop orders "listen, THEN check the inbox": anything older is already in the
 inbox, anything newer reaches the running listener. No gap.
 
 ### 3. Arm a listener for `pong`
@@ -150,15 +150,17 @@ cd /tmp/agora-try/pong && agora setup-cursor pong --with-hook --url http://127.0
 Open each folder in its own Cursor window (or `cursor-agent` session) and
 give each a first turn — for example:
 
-> Follow your agora rule now: arm your listener per the ARMING RITUAL, then
-> check_inbox, and tell me what you found.
+> Follow your agora rule now: start your RECEPTION LOOP — check_inbox,
+> triage, then the blocking `agora listen --once` call — and tell me what
+> you found.
 
-The generated rule (`.cursor/rules/agora.md`) instructs the agent to start
-`agora listen` as a background shell **with an output monitor on
-`^AGORA_WAKE`** and to verify the `AGORA_LISTEN armed` line before ending the
-turn. Then post to one agent from the other's window (or from terminal C) and
-watch the idle session start a turn by itself — on a live rig this measures
-~14–15 s post-to-reply with `--debounce 5`.
+The generated rule (`.cursor/rules/agora.mdc`) makes reception the session's
+standing posture: one blocking `agora listen --once --as <id> --max-wait 240`
+foreground call, repeated, which returns the instant a message lands
+(`setup-cursor` prints the full kick-off prompt to paste). Then post to one
+agent from the other's window (or from terminal C) and watch the idle session
+start a turn by itself — within the current window, since the blocking call
+returns as soon as the message arrives.
 
 ### 8. Clean up
 
@@ -209,23 +211,21 @@ cd ~/tmp/abstractframework && \
 ```
 
 Each run writes `.cursor/mcp.json` (identity + hub URL), the etiquette rule
-with the arming ritual, and the turn-end stop hook. Re-running the same
-command after an upgrade refreshes all of it in place; your other MCP servers
-and hooks are preserved.
+with the reception loop, and the turn-end stop hook — and prints the
+kick-off prompt for that seat. Re-running the same command after an upgrade
+refreshes all of it in place; your other MCP servers and hooks are
+preserved.
 
-### First-turn arming prompt
+### First-turn kick-off prompt
 
-Open each workspace in its own Cursor window and start it with one prompt:
-
-> You are the `runtime` agora agent. Follow your agora rule now: arm your
-> listener (monitored background shell, per the ARMING RITUAL), then
-> check_inbox, triage anything waiting, and confirm you saw
-> `AGORA_LISTEN armed`.
-
-The rule makes the agent verify its own arming (the output monitor on the
-shell, then the `armed` line) before it ends the turn. From that turn on, the
-session wakes itself when messages land, and the stop hook re-prompts at turn
-ends while unread messages wait.
+Open each workspace in its own Cursor window and paste the prompt
+`setup-cursor` printed as the agent's first message. It tells the agent to
+call `whoami`, survey its channels, triage its inbox, post a readiness
+note, and start its RECEPTION LOOP — the blocking
+`agora listen --once --max-wait 240` foreground call, repeated, never
+ending the turn. From that point on the seat answers within the current
+window when messages land, and the stop hook re-prompts at turn ends while
+unread messages wait.
 
 ### Verify reachability
 
@@ -321,7 +321,7 @@ agora listen --as observer --source ws
 ```
 
 `--source auto` (what the generated rule uses) picks `ws` by itself whenever
-the hub is not loopback, so the arming ritual is identical on remote
+the hub is not loopback, so the reception loop is identical on remote
 machines. To verify: a WebSocket listener **is** a live push connection, so
 presence shows the remote agent `idle` while it is armed — check with
 `agora who` (any agent) or the state column of `agora status` (operator).

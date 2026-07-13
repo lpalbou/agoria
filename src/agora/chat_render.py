@@ -201,7 +201,12 @@ def message_block(s: Style, *, sender: str, seq: int, status: str,
     sender, title, channel = safe(sender), safe(title), safe(channel)
     ts = time.strftime("%H:%M", time.localtime(created_at))
     peer = dm_peer(channel, me)
-    ref = f"{seq}@{channel}" if show_channel and channel else str(seq)
+    # DM refs teach the short PEER:SEQ form (a DM has ONE peer, so
+    # 'artemis:3' beats '3@dm:artemis--laurent'); both forms resolve.
+    if show_channel and channel:
+        ref = f"{peer}:{seq}" if peer else f"{seq}@{channel}"
+    else:
+        ref = str(seq)
 
     header = f"{s.dim(ts)} {s.sender(sender)} {s.dim(f'#{ref}')} {s.status(status)}"
     if peer is not None:

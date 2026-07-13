@@ -51,8 +51,32 @@ class AgoraClient:
     async def whoami(self) -> dict[str, Any]:
         return self._json(await self._http.get("/whoami"))
 
+    async def board(self) -> dict[str, Any]:
+        """The caller's decision board (pending-on-me / queue / proposals /
+        in-progress / pending-review / done), derived across its channels."""
+        return self._json(await self._http.get("/board"))
+
     async def create_channel(self, name: str, private: bool = True) -> dict[str, Any]:
         return self._json(await self._http.post("/channels", json={"name": name, "private": private}))
+
+    async def impose_block(self, agent_id: str, *, channel: str | None = None,
+                           seconds: float | None = None,
+                           reason: str = "") -> dict[str, Any]:
+        """Kick (seconds set) or ban (seconds None) — from one channel, or
+        from the whole hub when channel is None (operator only)."""
+        path = f"/channels/{channel}/blocks" if channel else "/hub/blocks"
+        return self._json(await self._http.post(
+            path, json={"agent": agent_id, "seconds": seconds, "reason": reason}))
+
+    async def lift_block(self, agent_id: str, *,
+                         channel: str | None = None) -> dict[str, Any]:
+        path = (f"/channels/{channel}/blocks/{agent_id}" if channel
+                else f"/hub/blocks/{agent_id}")
+        return self._json(await self._http.delete(path))
+
+    async def blocks(self, scope: str | None = None) -> list[dict[str, Any]]:
+        params = {"scope": scope} if scope else None
+        return self._json(await self._http.get("/blocks", params=params))
 
     async def create_invite(self, channel: str, agent_id: str | None = None,
                             ttl_seconds: float = 86400.0) -> str:
@@ -109,6 +133,10 @@ class AgoraClient:
     async def channel_info(self, channel: str) -> dict[str, Any]:
         """Channel metadata + members (with abouts): read before your first post."""
         return self._json(await self._http.get(f"/channels/{channel}/info"))
+
+    async def digest(self, channel: str) -> dict[str, Any]:
+        """A channel folded into open questions / decided / recorded decisions."""
+        return self._json(await self._http.get(f"/channels/{channel}/digest"))
 
     async def set_about(self, about: str) -> None:
         """Update your self-description (scope, ownership, what to ask you about)."""

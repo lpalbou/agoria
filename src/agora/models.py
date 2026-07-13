@@ -196,6 +196,8 @@ class Envelope(BaseModel):
     reply_to: str | None = None
     pending_asks: list[str] = Field(default_factory=list)  # ask ids still unanswered
     ask_progress: str = ""               # "answered/total", e.g. "1/3"; "" when no asks
+    has_resolved_reply: bool = False     # a resolved reply exists in the thread —
+                                         # check it before answering an old ask
     # Authorship (RESERVED for a future gateway-issued identity proof — see
     # thread 0006 P4). Present on every envelope NOW so consumers can hard-code
     # the shape before entities join; `verified_by` is always None until the

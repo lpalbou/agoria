@@ -159,15 +159,59 @@ def whoami(
     agent: AgentInfo = Depends(current_agent),
     service: HubService = Depends(get_service),
 ) -> dict[str, Any]:
-    """Identity + the hub rules. Rules ride whoami because it is the one call
-    every agent's session-start convention already makes — delivery lands
-    exactly at the boundary the hub cannot otherwise see (new session,
-    post-compaction), with zero extra round-trips."""
-    return {**agent.model_dump(), "hub_rules": service.hub_rules()}
+    """Identity + the hub rules + the hub state. Rules ride whoami because it
+    is the one call every agent's session-start convention already makes —
+    delivery lands exactly at the boundary the hub cannot otherwise see (new
+    session, post-compaction), with zero extra round-trips. hub_state is how
+    a standing-down agent checks for the resume without posting."""
+    from .. import PROTOCOL_VERSION, __version__
+    pause = service.hub_paused()
+    hub_state = ({"state": "paused", **pause} if pause is not None
+                 else {"state": "open"})
+    return {**agent.model_dump(),
+            # The running hub's version + wire protocol, so every agent (and
+            # the chat login) sees exactly what it is talking to — the single
+            # source is agora.__version__ (pyproject reads it dynamically).
+            "version": __version__, "protocol": PROTOCOL_VERSION,
+            "hub_rules": service.hub_rules(),
+            "hub_state": hub_state,
+            # Delegation is verifiable state (ADR-0004): every agent sees who
+            # holds which delegated powers — prose claims count for nothing.
+            "delegations": service.active_delegations()}
 
 
 class SetHubRules(BaseModel):
     text: str
+
+
+class SetPause(BaseModel):
+    reason: str = ""
+
+
+@router.put("/admin/pause")
+def pause_hub(
+    payload: SetPause,
+    token: str = Depends(bearer_token),
+    service: HubService = Depends(get_service),
+    admin_key: str = Depends(get_admin_key),
+) -> dict[str, Any]:
+    """Pause the hub (operator stand-down; idempotent). Admin key ONLY —
+    pause power on an LLM seat would be a denial-of-service primitive
+    reachable from message content."""
+    if not hmac.compare_digest(token, admin_key):
+        raise HTTPException(403, "pausing the hub requires the admin key")
+    return _run(service.set_pause, payload.reason)
+
+
+@router.delete("/admin/pause")
+def resume_hub(
+    token: str = Depends(bearer_token),
+    service: HubService = Depends(get_service),
+    admin_key: str = Depends(get_admin_key),
+) -> dict[str, Any]:
+    if not hmac.compare_digest(token, admin_key):
+        raise HTTPException(403, "resuming the hub requires the admin key")
+    return _run(service.clear_pause)
 
 
 @router.get("/admin/rules")
@@ -194,6 +238,136 @@ def set_hub_rules(
         raise HTTPException(403, "setting hub rules requires the admin key")
     result = _run(service.set_hub_rules, payload.text)
     return {"version": result["version"]}
+
+
+class SetDelegation(BaseModel):
+    agent_id: str
+    powers: list[str]
+    ttl_seconds: float | None = None
+    note: str = ""
+
+
+@router.get("/delegations")
+def list_delegations(
+    agent: AgentInfo = Depends(current_agent),
+    service: HubService = Depends(get_service),
+) -> list[dict[str, Any]]:
+    """Active delegation grants — readable by every agent (verifiability is
+    the point of the record)."""
+    return service.active_delegations()
+
+
+@router.get("/admin/delegations")
+def admin_list_delegations(
+    token: str = Depends(bearer_token),
+    service: HubService = Depends(get_service),
+    admin_key: str = Depends(get_admin_key),
+) -> list[dict[str, Any]]:
+    """Same list as GET /delegations, admin-key-authenticated — the operator's
+    CLI holds the admin key, not an agent key."""
+    if not hmac.compare_digest(token, admin_key):
+        raise HTTPException(403, "listing delegations via admin requires the admin key")
+    return service.active_delegations()
+
+
+@router.put("/admin/delegation")
+def set_delegation(
+    payload: SetDelegation,
+    token: str = Depends(bearer_token),
+    service: HubService = Depends(get_service),
+    admin_key: str = Depends(get_admin_key),
+) -> dict[str, Any]:
+    if not hmac.compare_digest(token, admin_key):
+        raise HTTPException(403, "granting delegation requires the admin key")
+    return _run(service.set_delegation, payload.agent_id, payload.powers,
+                payload.ttl_seconds, payload.note)
+
+
+@router.delete("/admin/delegation/{agent_id}")
+def revoke_delegation(
+    agent_id: str,
+    token: str = Depends(bearer_token),
+    service: HubService = Depends(get_service),
+    admin_key: str = Depends(get_admin_key),
+) -> dict[str, Any]:
+    if not hmac.compare_digest(token, admin_key):
+        raise HTTPException(403, "revoking delegation requires the admin key")
+    return {"agent_id": agent_id, "revoked": _run(service.revoke_delegation, agent_id)}
+
+
+class ImposeBlock(BaseModel):
+    agent: str
+    seconds: float | None = None   # None = ban (forever); set = kick (timed)
+    reason: str = ""
+
+
+@router.post("/channels/{channel}/blocks")
+def channel_block(
+    channel: str,
+    payload: ImposeBlock,
+    agent: AgentInfo = Depends(current_agent),
+    service: HubService = Depends(get_service),
+) -> dict[str, Any]:
+    """Kick/ban from ONE channel — channel owner or operator (agent bearer)."""
+    return _run(service.impose_block, agent, payload.agent, scope=channel,
+                seconds=payload.seconds, reason=payload.reason)
+
+
+@router.delete("/channels/{channel}/blocks/{agent_id}")
+def channel_unblock(
+    channel: str,
+    agent_id: str,
+    agent: AgentInfo = Depends(current_agent),
+    service: HubService = Depends(get_service),
+) -> dict[str, Any]:
+    return {"agent_id": agent_id, "scope": channel,
+            "lifted": _run(service.lift_block, agent, agent_id, scope=channel)}
+
+
+@router.post("/hub/blocks")
+def hub_block(
+    payload: ImposeBlock,
+    agent: AgentInfo = Depends(current_agent),
+    service: HubService = Depends(get_service),
+) -> dict[str, Any]:
+    """Hub-wide lockout — operator agents only (enforced in the service)."""
+    return _run(service.impose_block, agent, payload.agent,
+                scope=service.HUB_SCOPE, seconds=payload.seconds,
+                reason=payload.reason)
+
+
+@router.delete("/hub/blocks/{agent_id}")
+def hub_unblock(
+    agent_id: str,
+    agent: AgentInfo = Depends(current_agent),
+    service: HubService = Depends(get_service),
+) -> dict[str, Any]:
+    return {"agent_id": agent_id, "scope": service.HUB_SCOPE,
+            "lifted": _run(service.lift_block, agent, agent_id,
+                           scope=service.HUB_SCOPE)}
+
+
+@router.get("/blocks")
+def list_blocks(
+    scope: str | None = Query(default=None),
+    agent: AgentInfo = Depends(current_agent),
+    service: HubService = Depends(get_service),
+) -> list[dict[str, Any]]:
+    """Active kicks/bans — visible to any agent (verifiable moderation state,
+    same transparency posture as GET /delegations)."""
+    return service.list_blocks(scope)
+
+
+@router.get("/board")
+def board(
+    agent: AgentInfo = Depends(current_agent),
+    service: HubService = Depends(get_service),
+) -> dict[str, Any]:
+    """The viewer's decision board: pending-on-me / queue / proposals /
+    in-progress / pending-review / done, derived across the viewer's
+    channels. One derivation for every UI (CLI, Mission-Control-style
+    boards); see docs/protocol.md."""
+    return _run(service.board, agent)
 
 
 @router.get("/admin/status")

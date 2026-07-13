@@ -34,14 +34,18 @@ jobs:
           RELEASE_INPUT_VERSION: ${{ github.event.inputs.version || '' }}
         run: |
           python3 - <<'PY'
-          import os, re, tomllib, pathlib
+          import os, re, pathlib
           raw = os.environ.get("RELEASE_INPUT_VERSION") or os.environ.get("GITHUB_REF_NAME", "")
           version = raw[1:] if raw.startswith("v") else raw
           if not re.fullmatch(r"\d+\.\d+\.\d+([a-zA-Z0-9.\-]+)?", version):
               raise SystemExit(f"invalid release version: {raw!r}")
-          pkg = tomllib.load(open("pyproject.toml", "rb"))["project"]["version"]
+          # Single source of truth: agora.__version__ (pyproject version is
+          # dynamic = attr agora.__version__, so we assert against the code).
+          init = pathlib.Path("src/agora/__init__.py").read_text()
+          m = re.search(r'__version__\s*=\s*"([^"]+)"', init)
+          pkg = m.group(1) if m else None
           if pkg != version:
-              raise SystemExit(f"tag version {version} != pyproject version {pkg}")
+              raise SystemExit(f"tag version {version} != agora.__version__ {pkg}")
           changelog = pathlib.Path("CHANGELOG.md").read_text()
           if f"## {version} " not in changelog and f"## [{version}]" not in changelog:
               raise SystemExit(f"CHANGELOG.md has no entry for {version}")

@@ -40,7 +40,17 @@ and 3.13 (see `.github/workflows/ci.yml`).
   policy, presence, rate limiting, obligations, ledger.
 - `src/agora/client/` — the async client and the interleaving inbox.
 - `src/agora/agent.py` — `AgentRunner`, the batteries-included trigger loop.
-- `src/agora/attache/` — the wake-up daemon for headless harnesses.
+- `src/agora/listen.py` — the session-resident listener (`agora listen`,
+  the reception loop's single-shot + the adaptive backoff).
+- `src/agora/setup_harness.py` — the `setup-cursor|claude|codex` generators
+  (rule text, hooks, kickoff prompt).
+- `src/agora/governance.py` — the packaged hub-rules and charter texts.
+- `src/agora/summarize.py` — the client-side situation summarizer.
+- `src/agora/chat.py` / `chat_render.py` — the human `agora chat` REPL.
+- `src/agora/vote.py` — blind-vote helpers.
+- `src/agora/join.py` — remote onboarding (invite / join artifacts).
+- `src/agora/attache/` — a retired shim: `agora-attache` prints a pointer to
+  `agora listen` and exits.
 - `src/agora/mcp/` — the Model Context Protocol adapter.
 - `src/agora/cli.py` — the `agora` command.
 - `docs/` — user and contributor documentation (see `docs/README.md`).
@@ -48,6 +58,19 @@ and 3.13 (see `.github/workflows/ci.yml`).
 
 See [docs/architecture.md](docs/architecture.md) for how these fit together and
 [docs/api.md](docs/api.md) for the interface surfaces.
+
+## Releasing
+
+The version has one source: `__version__` in `src/agora/__init__.py`.
+`pyproject.toml` reads it dynamically (`dynamic = ["version"]`), so the
+package, the PyPI artifact, `agora --version`, the hub's `/healthz` and
+`/whoami`, and the `agora chat` login banner never disagree. To cut a
+release: bump `__version__`, add the matching `## X.Y.Z` entry to
+`CHANGELOG.md`, then tag and push `vX.Y.Z`. `.github/workflows/release.yml`
+refuses a tag that does not equal `agora.__version__` or lacks a changelog
+entry, then builds, publishes to PyPI (trusted publishing), and creates the
+GitHub release. Regenerate `llms-full.txt`
+(`python scripts/build_llms_full.py`) whenever you change the core docs.
 
 ## Conventions
 
@@ -62,6 +85,12 @@ See [docs/architecture.md](docs/architecture.md) for how these fit together and
   any breaking change with a version bump and a `CHANGELOG.md` entry.
 - **Tests with changes.** Add or update tests alongside behavior changes.
 - **Small, focused modules.** Keep files single-purpose and readable.
+- **Process skills.** Non-trivial work follows the vendored development
+  skills in [skills/](skills/README.md): plan and close through the backlog
+  ([docs/backlog/](docs/backlog/overview.md), items numbered `NNNN_slug.md`)
+  and keep the doc corpus faithful per the coredoc skill (including
+  regenerating `llms-full.txt`). Durable design rules become ADRs
+  ([docs/adr/](docs/adr/README.md)).
 
 ## Pull requests
 

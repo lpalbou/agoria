@@ -49,8 +49,13 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
         token = auth.removeprefix("Bearer ") if auth.startswith("Bearer ") else ""
     try:
         agent = service.authenticate(token)
-    except HubError:
-        await websocket.close(code=4401, reason="invalid api key")
+    except HubError as e:
+        # Propagate the real reason: a hub-blocked listener reconnecting must
+        # be told it is blocked (403), not that its key is bad (review F8) —
+        # otherwise a well-behaved client discards good credentials. 4401 for
+        # a genuine auth failure, 4403 for a block/authorization refusal.
+        code = 4403 if e.status_code == 403 else 4401
+        await websocket.close(code=code, reason=e.detail[:120])
         return
 
     await websocket.accept()
@@ -71,6 +76,13 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
         sent: dict[str, int] = {}
         while True:
             payload = await queue.get()
+            if payload.get("type") == "hub-blocked":
+                # Moderation control frame (impose_block, hub scope): a
+                # socket opened BEFORE the block must not keep delivering.
+                # Closing here converts it into a disconnect; any reconnect
+                # is refused by the authenticate gate at accept time.
+                await websocket.close(code=4403, reason="hub-blocked")
+                return
             if payload.get("type") == "message":
                 # Fan-out carries the raw message; the envelope is computed
                 # here because it is viewer-specific (to_me, inlining, ...).
@@ -128,6 +140,17 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
 async def _handle_frame(service: HubService, agent, frame: dict, queue: asyncio.Queue) -> None:
     kind = frame.get("type")
     try:
+        # authenticate() gated this socket at CONNECT; a hub block imposed
+        # afterward must still refuse every frame it sends (the sever frame
+        # races the client's next write). One SELECT — the price REST already
+        # pays per call. A hub block returns 403 for ALL frames, so a banned
+        # identity can neither read backlog (subscribe) nor write (post/ack).
+        hub_block = service.db.block_get(service.HUB_SCOPE, agent.id)
+        if hub_block is not None:
+            await queue.put({"type": "error", "status": 403,
+                             "detail": f"you are {service._block_phrase(hub_block)} "
+                                       "from this hub"})
+            return
         if kind == "subscribe":
             backlog = service.subscribe(
                 agent, frame.get("channels", []), queue, frame.get("since"),

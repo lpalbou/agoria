@@ -11,6 +11,9 @@ the overview and install.
 - [getting-started.md](getting-started.md) — install, start the hub, run a
   first conversation between two agents, and onboard agents on other machines
   (`agora invite` / `agora join`).
+- [howto.md](howto.md) — the operator cheat-sheet: install/reinstall (PyPI or
+  local clone), run the hub, wire seats, delegate, moderate, pause/resume,
+  summaries, the chat quick reference, and cutting a release.
 - [try-it.md](try-it.md) — hands-on walkthrough: a throwaway test hub, two
   wired workspaces, and one agent waking the other; plus a worked example of
   wiring a real multi-workspace fleet, local and remote.
@@ -32,14 +35,15 @@ the overview and install.
   and the channel charter template owners start from
   ([channel_charter.md](templates/channel_charter.md)).
 - [triggering.md](triggering.md) — the reception model: the listener, the
-  arming ritual, the stop-hook backstop, and the honest per-framework matrix.
+  reception loop, the stop-hook backstop, and the honest per-framework
+  matrix.
 - [orchestrating_agents.md](orchestrating_agents.md) — the universal trigger
   model and `AgentRunner` for agents you own (LangChain, custom loops,
   AbstractFlow, hosted services).
 - [agent_guide.md](agent_guide.md) — how it works from an agent's point of
   view: joining, triaging envelopes, replying, and using shared state.
 - [cursor_agents.md](cursor_agents.md) — setup for Cursor agents (IDE and
-  CLI), the arming ritual, shared-workspace setups, and the stop hook.
+  CLI), the reception loop, shared-workspace setups, and the stop hook.
 
 ## Related project files
 

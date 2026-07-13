@@ -154,6 +154,49 @@ CREATE TABLE IF NOT EXISTS hub_rules (
     version     INTEGER NOT NULL,
     updated_at  REAL NOT NULL
 );
+-- Delegation record (0068): the operator's delegate as verifiable hub state
+-- — who, which POWERS (ruling/operational/reporting), until when. Grants are
+-- append-only rows; the active grant for an agent is the newest unrevoked,
+-- unexpired one. Prose claims of delegation count for nothing.
+CREATE TABLE IF NOT EXISTS delegations (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent_id    TEXT NOT NULL,
+    powers      TEXT NOT NULL,          -- JSON list, subset of ruling|operational|reporting
+    granted_at  REAL NOT NULL,
+    expires_at  REAL NOT NULL,
+    revoked_at  REAL,
+    note        TEXT NOT NULL DEFAULT ''
+);
+-- Operator pause (0069): singleton state + the interval history. Persisted
+-- so a hub restart cannot silently resume the fleet; intervals feed the
+-- escalation-clock exclusion (a pause must never age obligations into an
+-- SLA-breach storm). ended_at NULL = the pause is ongoing.
+CREATE TABLE IF NOT EXISTS hub_pauses (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at  REAL NOT NULL,
+    ended_at    REAL,
+    reason      TEXT NOT NULL DEFAULT '',
+    started_by  TEXT NOT NULL DEFAULT 'operator'
+);
+-- Moderation blocks (kick/ban): scope is 'hub' or a channel name. A kick is
+-- a block with an expiry; a ban has expires_at NULL (forever). Rows are
+-- append-only history; the ACTIVE block for (scope, agent) is the newest
+-- unlifted, unexpired one. Like delegations, authority is verifiable state:
+-- enforcement reads these rows, never anyone's prose.
+CREATE TABLE IF NOT EXISTS blocks (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    scope       TEXT NOT NULL,          -- 'hub' | channel name
+    agent_id    TEXT NOT NULL,
+    imposed_by  TEXT NOT NULL,
+    imposed_at  REAL NOT NULL,
+    expires_at  REAL,                   -- NULL = ban (no expiry)
+    lifted_at   REAL,
+    reason      TEXT NOT NULL DEFAULT ''
+);
+-- block_get runs inside authenticate() on EVERY request; this append-only
+-- table never prunes, so index the lookup key to keep it O(log n) rather
+-- than a growing reverse table scan (review F6).
+CREATE INDEX IF NOT EXISTS idx_blocks_scope_agent ON blocks (scope, agent_id);
 """
 
 
@@ -358,6 +401,11 @@ class Database:
                    about=r["about"], joined_at=r["joined_at"])
             for r in rows
         ]
+
+    def channel_names(self) -> list[str]:
+        with self._lock:
+            rows = self._conn.execute("SELECT name FROM channels").fetchall()
+        return [r["name"] for r in rows]
 
     def channels_of(self, agent_id: str) -> list[str]:
         with self._lock:
@@ -1002,6 +1050,12 @@ class Database:
             )
             self._conn.commit()
 
+    def list_operator_ids(self) -> list[str]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id FROM agents WHERE operator = 1").fetchall()
+        return [r["id"] for r in rows]
+
     # -- charter receipts + hub rules (governance surfaces) ----------------------
 
     def charter_receipt_set(self, agent_id: str, channel: str, version: int) -> None:
@@ -1053,6 +1107,186 @@ class Database:
             ).fetchone()
         return {"text": row["text"], "version": row["version"],
                 "updated_at": row["updated_at"]}
+
+    # -- delegation record (0068) --------------------------------------------------
+
+    def delegation_set(self, agent_id: str, powers: list[str],
+                       expires_at: float, note: str) -> dict[str, Any]:
+        """Grant (or replace) an agent's delegation. Prior active grants for
+        the same agent are revoked in the same transaction — one active grant
+        per agent, history preserved as rows."""
+        now = time.time()
+        with self._lock:
+            self._conn.execute(
+                "UPDATE delegations SET revoked_at = ? WHERE agent_id = ?"
+                " AND revoked_at IS NULL", (now, agent_id))
+            self._conn.execute(
+                "INSERT INTO delegations (agent_id, powers, granted_at,"
+                " expires_at, note) VALUES (?,?,?,?,?)",
+                (agent_id, json.dumps(sorted(powers)), now, expires_at, note))
+            self._conn.commit()
+        return {"agent_id": agent_id, "powers": sorted(powers),
+                "granted_at": now, "expires_at": expires_at, "note": note}
+
+    def delegation_revoke(self, agent_id: str) -> bool:
+        """True only when a LIVE grant was revoked: expired rows are still
+        stamped (history hygiene) but do not count — revoking a dead grant
+        must not announce anything (review LOW-4)."""
+        now = time.time()
+        with self._lock:
+            live = self._conn.execute(
+                "SELECT COUNT(*) AS n FROM delegations WHERE agent_id = ?"
+                " AND revoked_at IS NULL AND expires_at > ?",
+                (agent_id, now)).fetchone()["n"]
+            self._conn.execute(
+                "UPDATE delegations SET revoked_at = ? WHERE agent_id = ?"
+                " AND revoked_at IS NULL", (now, agent_id))
+            self._conn.commit()
+        return live > 0
+
+    def delegations_active(self) -> list[dict[str, Any]]:
+        """Active grants: unrevoked and unexpired, newest per agent."""
+        now = time.time()
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT agent_id, powers, granted_at, expires_at, note"
+                " FROM delegations WHERE revoked_at IS NULL AND expires_at > ?"
+                " ORDER BY id DESC", (now,)).fetchall()
+        seen: set[str] = set()
+        out = []
+        for r in rows:
+            if r["agent_id"] in seen:
+                continue
+            seen.add(r["agent_id"])
+            out.append({"agent_id": r["agent_id"],
+                        "powers": json.loads(r["powers"]),
+                        "granted_at": r["granted_at"],
+                        "expires_at": r["expires_at"], "note": r["note"]})
+        return out
+
+    # -- moderation blocks (kick/ban) -----------------------------------------------
+
+    @staticmethod
+    def _block_row(r: Any) -> dict[str, Any]:
+        return {"scope": r["scope"], "agent_id": r["agent_id"],
+                "imposed_by": r["imposed_by"], "imposed_at": r["imposed_at"],
+                "expires_at": r["expires_at"], "reason": r["reason"]}
+
+    def block_set(self, scope: str, agent_id: str, imposed_by: str,
+                  expires_at: float | None, reason: str) -> dict[str, Any]:
+        """Impose a block (kick when expires_at is set, ban when None). Any
+        prior active block on the same (scope, agent) is lifted in the same
+        transaction — one active block per pair, history preserved as rows."""
+        now = time.time()
+        with self._lock:
+            self._conn.execute(
+                "UPDATE blocks SET lifted_at = ? WHERE scope = ?"
+                " AND agent_id = ? AND lifted_at IS NULL", (now, scope, agent_id))
+            self._conn.execute(
+                "INSERT INTO blocks (scope, agent_id, imposed_by, imposed_at,"
+                " expires_at, reason) VALUES (?,?,?,?,?,?)",
+                (scope, agent_id, imposed_by, now, expires_at, reason))
+            self._conn.commit()
+        return {"scope": scope, "agent_id": agent_id, "imposed_by": imposed_by,
+                "imposed_at": now, "expires_at": expires_at, "reason": reason}
+
+    def block_lift(self, scope: str, agent_id: str) -> bool:
+        """True only when a LIVE block was lifted — lifting an expired or
+        absent block is a no-op that must not announce anything."""
+        now = time.time()
+        with self._lock:
+            live = self._conn.execute(
+                "SELECT COUNT(*) AS n FROM blocks WHERE scope = ? AND agent_id = ?"
+                " AND lifted_at IS NULL AND (expires_at IS NULL OR expires_at > ?)",
+                (scope, agent_id, now)).fetchone()["n"]
+            self._conn.execute(
+                "UPDATE blocks SET lifted_at = ? WHERE scope = ?"
+                " AND agent_id = ? AND lifted_at IS NULL", (now, scope, agent_id))
+            self._conn.commit()
+        return live > 0
+
+    def block_get(self, scope: str, agent_id: str) -> dict[str, Any] | None:
+        """The ACTIVE block for (scope, agent), or None: newest unlifted row
+        that has not expired. Expired rows stay as history but gate nothing."""
+        now = time.time()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT scope, agent_id, imposed_by, imposed_at, expires_at, reason"
+                " FROM blocks WHERE scope = ? AND agent_id = ? AND lifted_at IS NULL"
+                " AND (expires_at IS NULL OR expires_at > ?)"
+                " ORDER BY id DESC LIMIT 1", (scope, agent_id, now)).fetchone()
+        return None if row is None else self._block_row(row)
+
+    def blocks_active(self, scope: str | None = None) -> list[dict[str, Any]]:
+        """All active blocks (newest per scope+agent), optionally one scope."""
+        now = time.time()
+        cond = " AND scope = ?" if scope is not None else ""
+        args: tuple[Any, ...] = (now, scope) if scope is not None else (now,)
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT scope, agent_id, imposed_by, imposed_at, expires_at, reason"
+                " FROM blocks WHERE lifted_at IS NULL"
+                " AND (expires_at IS NULL OR expires_at > ?)" + cond +
+                " ORDER BY id DESC", args).fetchall()
+        seen: set[tuple[str, str]] = set()
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            key = (r["scope"], r["agent_id"])
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(self._block_row(r))
+        return out
+
+    # -- operator pause (0069) ----------------------------------------------------
+
+    def pause_get(self) -> dict[str, Any] | None:
+        """The ongoing pause, or None. At most one row has ended_at NULL."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT started_at, reason, started_by FROM hub_pauses"
+                " WHERE ended_at IS NULL ORDER BY id DESC LIMIT 1").fetchone()
+        if row is None:
+            return None
+        return {"since": row["started_at"], "reason": row["reason"],
+                "by": row["started_by"]}
+
+    def pause_start(self, reason: str, by: str) -> tuple[dict[str, Any], bool]:
+        """Idempotent: starting while paused returns the existing pause.
+        The `created` flag is decided under the SAME lock as the existence
+        check, so two racing pause calls cannot both claim creation (and
+        therefore cannot both broadcast — review LOW-5)."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT started_at, reason, started_by FROM hub_pauses"
+                " WHERE ended_at IS NULL").fetchone()
+            if row is not None:
+                return ({"since": row["started_at"], "reason": row["reason"],
+                         "by": row["started_by"]}, False)
+            now = time.time()
+            self._conn.execute(
+                "INSERT INTO hub_pauses (started_at, reason, started_by)"
+                " VALUES (?,?,?)", (now, reason, by))
+            self._conn.commit()
+        return ({"since": now, "reason": reason, "by": by}, True)
+
+    def pause_end(self) -> bool:
+        """Idempotent: True if a pause was actually ended."""
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE hub_pauses SET ended_at = ? WHERE ended_at IS NULL",
+                (time.time(),))
+            self._conn.commit()
+        return cur.rowcount > 0
+
+    def pause_intervals(self, since: float) -> list[tuple[float, float | None]]:
+        """Pause intervals overlapping [since, now] — feeds the escalation
+        clock exclusion. Few rows by nature; callers overlap in Python."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT started_at, ended_at FROM hub_pauses"
+                " WHERE ended_at IS NULL OR ended_at > ?", (since,)).fetchall()
+        return [(r["started_at"], r["ended_at"]) for r in rows]
 
     def checkpoint(self) -> None:
         """Fold the WAL back into the main database file. Called on graceful

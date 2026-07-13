@@ -285,11 +285,57 @@ def test_hook_version_stamp_and_shared_guards():
     for kw in [{}, {"reprompt_key": "followup_message"},
                {"noop_output": '""'}]:
         script = stop_hook_script("http://h:1", "a", **kw)
-        assert script.splitlines()[1] == "# agora-hook v2"
+        assert script.splitlines()[1] == "# agora-hook v3"
         assert "stop_hook_active" in script
-        assert "hook-attempts-" in script       # v2 ledger, not v1 hook-state
+        assert "hook-attempts-" in script       # v2+ ledger, not v1 hook-state
         assert "hook-state" not in script
         assert "wait=" not in script            # instant check, never long-poll
+
+
+def test_cursor_hook_nags_dead_listener_and_only_cursor():
+    """Cursor reception exists only while the agent's own RECEPTION LOOP
+    runs — so ONLY the Cursor hook carries the broken-loop nag (Claude
+    re-arms via its own hooks; Codex has no idle wake and must not be
+    nagged toward the impossible)."""
+    import json as _json
+    import os
+    import pathlib
+    import subprocess
+    import tempfile
+
+    cursor = stop_hook_script("http://127.0.0.1:9", "seat",
+                              reprompt_key="followup_message",
+                              check_listener=True)
+    assert "RECEPTION LOOP" in cursor and "listen-{AGENT}.pid" in cursor
+    assert "listen --once" in cursor and "never end your turn" in cursor
+    for other in (stop_hook_script("http://h:1", "a"),
+                  stop_hook_script("http://h:1", "a", noop_output='""')):
+        assert "os.kill" not in other           # no pidfile probe elsewhere
+
+    # Behavior: dead pidfile -> nag even with an unreachable hub/empty inbox;
+    # live pid -> silent noop; stop_hook_active -> silent (loop guard).
+    script = pathlib.Path(tempfile.mkdtemp()) / "hook.py"
+    script.write_text(cursor)
+    home = tempfile.mkdtemp()
+    (pathlib.Path(home) / "keys.json").write_text(
+        _json.dumps({"http://127.0.0.1:9::seat": "k"}))
+    env = {**os.environ, "AGORA_HOME": home}
+
+    (pathlib.Path(home) / "listen-seat.pid").write_text("999999")
+    out = subprocess.run(["python3", str(script)], input="{}",
+                         capture_output=True, text=True, env=env).stdout
+    assert "RECEPTION LOOP" in _json.loads(out)["followup_message"]
+
+    (pathlib.Path(home) / "listen-seat.pid").write_text(str(os.getpid()))
+    out = subprocess.run(["python3", str(script)], input="{}",
+                         capture_output=True, text=True, env=env).stdout
+    assert out.strip() == "{}"
+
+    (pathlib.Path(home) / "listen-seat.pid").write_text("999999")
+    out = subprocess.run(["python3", str(script)],
+                         input='{"stop_hook_active": true}',
+                         capture_output=True, text=True, env=env).stdout
+    assert out.strip() == "{}"
 
 
 # ---------------------------------------------------------------------------
@@ -306,64 +352,68 @@ def test_rule_text_cursor_has_arming_ritual_and_no_watcher_ban(tmp_path):
     assert rule.startswith("---\nalwaysApply: true\n---\n")
     assert rule.endswith(rule_text("runtime"))   # the one shared template
 
-    # ARMING RITUAL: monitored background listen, then check_inbox, verify
-    # armed, re-arm at boundaries if dead.
-    assert "ARMING RITUAL" in rule and "FIRST TURN" in rule
-    assert "agora listen --as runtime" in rule
-    assert "MONITORED BACKGROUND" in rule and "AGORA_WAKE" in rule
-    assert "60s" in rule
-    assert "THEN call `check_inbox`" in rule
-    assert "AGORA_LISTEN armed" in rule
-    assert "re-arm" in rule
+    # RECEPTION LOOP: the blocking foreground listen is reception on Cursor
+    # (background-task notifications proved build-dependent, 2026-07-13).
+    assert "RECEPTION LOOP" in rule and "FIRST turn" in rule
+    assert "NEVER end your turn" in rule
+    assert "agora listen --once --as runtime --max-wait 240" in rule
+    assert "FOREGROUND shell call" in rule and "block_until_ms: 280000" in rule
+    assert "exit 2" in rule and "exit 0" in rule
 
     # The v1 lies are gone: watcher ban, push-not-pull promise, attaché.
     assert "never start a watcher" not in rule
     assert "push, not pull" not in rule
     assert "attach" not in rule.lower()          # attaché/attache both
 
-    # Foreground-waiting ban survives the reversal.
-    assert "FOREGROUND" in rule and "wait_for_messages" in rule
+    # Exactly ONE sanctioned wait; everything else stays banned.
+    assert "ONE sanctioned" in rule and "wait_for_messages" in rule
 
 
-def test_rule_text_cursor_monitor_is_mandatory_with_exact_args(tmp_path):
-    """The live-test failure mode: a listener backgrounded WITHOUT the output
-    monitor runs fine and stays deaf. The rule must declare the monitor
-    MANDATORY and spell out the EXACT tool arguments — an agent must be able
-    to copy them rather than improvise."""
+def test_rule_text_cursor_loop_is_ordered_and_bounded(tmp_path):
+    """The loop must be copy-executable and safe: inbox first, ONE blocking
+    wait as the resting state, the human's prompt handled when the wait
+    returns, and a stop condition on hard errors (a tight error loop is
+    worse than deafness)."""
     setup_cursor(tmp_path, "runtime", "http://hub:8765", "", "agora-mcp",
                  with_hook=False)
     rule = (tmp_path / ".cursor" / "rules" / "agora.mdc").read_text()
 
-    assert "MANDATORY" in rule
-    # The one true arming call, verbatim (pattern ^AGORA_WAKE, debounce
-    # >= 5000ms, immediate backgrounding):
-    assert "command: agora listen --as runtime" in rule
-    assert "block_until_ms: 0" in rule
-    assert ('notify_on_output: {"pattern": "^AGORA_WAKE", '
-            '"reason": "agora wake", "debounce_ms": 60000}') in rule
-    assert "debounce_ms >= 5000" in rule
-    # Name the wrong ways explicitly (they "work" and stay deaf):
-    assert "`&`/nohup" in rule
-    assert "stays deaf" in rule
+    assert rule.index("check_inbox") < rule.index("agora listen --once")
+    assert "resting state" in rule
+    assert "handle their prompt first" in rule
+    assert "STOP looping" in rule and "error loop is worse" in rule
 
 
-def test_rule_text_cursor_self_check_before_turn_end(tmp_path):
-    """Arming must be self-checkable: both halves (the tool call carried the
-    monitor; the armed sentinel is visible), the already-armed lock trap, and
-    the order 'fix it BEFORE ending the turn'."""
+def test_rule_text_cursor_loop_never_says_kill(tmp_path):
+    """Regression (2026-07-13 fleet incident): the old rule told seats to
+    kill the lock holder on already-armed, which caused cross-seat `kill`
+    sprees (every listener looks identical by name) and supervisor wars. The
+    rule must now forbid killing and treat already-armed as self-resolving."""
     setup_cursor(tmp_path, "runtime", "http://hub:8765", "", "agora-mcp",
                  with_hook=False)
     rule = (tmp_path / ".cursor" / "rules" / "agora.mdc").read_text()
 
-    assert "SELF-CHECK before ending the turn" in rule
-    assert "MUST see an `AGORA_LISTEN armed` line" in rule
-    assert "carried `notify_on_output`" in rule
-    # The deaf-lock trap: an unmonitored earlier listener holds the lock, so
-    # a CORRECT re-arm reports already-armed and exits — the rule must not
-    # let that read as success.
-    assert "reason=already-armed" in rule
-    assert "kill" in rule and "listen-runtime.pid" in rule
-    assert "redo step 1" in rule
+    assert "NEVER pgrep or kill" in rule
+    assert "kill it once" not in rule            # the old harmful imperative is gone
+    assert "winding" in rule                     # already-armed = your own prior call
+    assert "never kill anything" in rule
+    # The default (non-headless) loop stays the bounded fixed window.
+    assert "--adaptive" not in rule
+
+
+def test_rule_text_cursor_headless_is_adaptive(tmp_path):
+    """--headless selects the adaptive reception loop: the tool tunes the
+    window, the agent passes a CONSTANT command + block_until_ms, and it must
+    never be told to compute the wait itself."""
+    setup_cursor(tmp_path, "runtime", "http://hub:8765", "", "agora-mcp",
+                 with_hook=False, headless=True)
+    rule = (tmp_path / ".cursor" / "rules" / "agora.mdc").read_text()
+
+    assert "agora listen --once --as runtime --adaptive --max-wait 1200" in rule
+    assert "block_until_ms: 1260000" in rule
+    assert "NEVER compute or vary the wait yourself" in rule
+    assert "NEVER pgrep or kill" in rule
+    assert "listen-runtime.backoff" in rule
 
 
 def test_rule_text_wake_is_informational_in_all_variants(tmp_path):

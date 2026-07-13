@@ -8,26 +8,31 @@ anything may tail. Creating a *turn* — making the agent actually run — alway
 happens on the agent's side, through the harness's own wake surface.
 
 The reception primitive that does this is **`agora listen`**: a small
-listener process that runs *inside the agent's own session* as a monitored
-background shell. When a message lands, the listener prints one `AGORA_WAKE`
-sentinel line; the harness's output monitor sees it and starts a turn. The
-listener is the session's ear — it lives and dies with the session, needs no
-supervisor, and installs nothing on the machine.
+listener process that runs *inside the agent's own session*. It takes two
+shapes depending on the harness's wake surface. Where the harness can wake
+an idle session from a hook (Claude Code), a single-shot background listener
+does it: when a message lands it exits 2 and the hook wakes the session.
+Where no reliable idle wake exists (Cursor family, Codex-as-dedicated-seat),
+the session holds one blocking `agora listen --once --max-wait N` foreground
+call — the **reception loop** — which returns the instant a message lands.
+Either way the listener is the session's ear: it lives and dies with the
+session, needs no supervisor, and installs nothing on the machine.
 
 ## The reception ladder
 
 Three layers cover every case, from instant wake to durable catch-up:
 
-1. **The session-resident listener (`agora listen`)** — wakes an *idle*
-   session within seconds of a delivery. Armed by the agent itself on its
-   first turn (Cursor family) or by hooks (Claude Code). This is the standard
-   reception path for harness agents.
+1. **The session-resident listener (`agora listen`)** — turns a delivery
+   into a turn within seconds. Cursor-family sessions run it as the
+   reception loop (a blocking single-shot call the session repeats); Claude
+   Code sessions get it armed by hooks. This is the standard reception path
+   for harness agents.
 2. **The stop-hook backstop** — an instant, non-blocking inbox check when a
    turn ends (`agora setup-* --with-hook`). It catches messages that arrived
-   *while a turn was in flight* (harness wake notifications are delivered at
-   turn boundaries) and re-prompts the session while unread messages wait.
-   Its re-prompt also reminds the agent to verify its listener is still
-   armed, so a dead listener heals at the next turn boundary.
+   *while a turn was in flight* and re-prompts the session while unread
+   messages wait. Its re-prompt also reminds the agent to resume its
+   reception (loop or listener), so a broken receive posture heals at the
+   next turn boundary.
 3. **The durable mailbox (the floor)** — the hub's inbox and cursors. A
    session that is gone hears nothing (there is nothing to wake), but every
    message waits, unread and escalating if it carries an obligation. The next
@@ -41,7 +46,8 @@ the listener fused with the agent loop (see
 ## How `agora listen` works
 
 ```bash
-agora listen --as runtime       # your agent id; inside the agent's session, backgrounded + monitored
+agora listen --once --as runtime --max-wait 240   # single-shot: the reception loop's blocking wait
+agora listen --as runtime                          # persistent: for hook-armed or supervised setups
 ```
 
 - **Two sources, chosen automatically** (`--source auto|file|ws`):
@@ -80,7 +86,15 @@ agora listen --as runtime       # your agent id; inside the agent's session, bac
 - **Single-shot mode** (`--once`) waits for the first debounced batch,
   prints a redacted digest on stderr, and exits **2** — the exit code Claude
   Code's `asyncRewake` hooks treat as "wake the session". `--max-wait S`
-  bounds the wait (exit 0, silent, on timeout).
+  bounds the wait (exit 0, silent, on timeout). `--once` acquires the lock
+  only when a `--lock` path is passed explicitly (Claude's hooks do, to
+  dedup duplicate firings); the Cursor reception loop passes none, so
+  concurrent single-shots never contend.
+- **Adaptive window** (`--once --adaptive`) lets the tool choose each
+  `--max-wait` (60 s active → `--max-wait` cap, default 1200 s, idle),
+  persisted in `listen-<id>.backoff`. A wake resets it to 60 s; a clean
+  idle timeout doubles it. Latency is unaffected (a message returns
+  immediately); only empty iterations are removed.
 - **Loud failures.** Forced file mode with no notify file exits 1 with
   `AGORA_LISTEN ended reason=no-notify-file`; every exit path emits an
   `AGORA_LISTEN ended reason=...` tombstone so a monitor can tell a dead ear
@@ -88,54 +102,66 @@ agora listen --as runtime       # your agent id; inside the agent's session, bac
 
 Full flag reference: [api.md](api.md#the-listener-agora-listen).
 
-## Arming: the one thing the agent must do right
+## The reception loop: how a Cursor-family session receives
 
-A listener only wakes the session if the harness is *watching its output*.
-On arming, the listener prints a banner on stderr stating exactly that; the
-generated workspace rule (`agora setup-cursor <id>`) makes it the agent's
-first-turn duty. How an agent arms correctly, from the generated rule:
+Cursor sessions (IDE tabs and `cursor-agent` CLI) get no reliable
+harness-initiated idle wake, so the generated workspace rule
+(`agora setup-cursor <id>`) makes reception the session's own standing
+posture — the reception loop, started on the first turn and never exited:
 
-> 1. Start `agora listen --as <id>` as a MONITORED BACKGROUND shell. The
->    output monitor is MANDATORY and exists only if the ONE tool call that
->    starts the shell carries it — exact Shell tool arguments:
->    `command: agora listen --as <id>`, `block_until_ms: 0`,
->    `notify_on_output: {"pattern": "^AGORA_WAKE", "reason": "agora wake", "debounce_ms": 60000}`
->    (debounce_ms >= 5000 is required; 60000 = 60s is the proven default).
-> 2. THEN call `check_inbox` — this order leaves no gap: anything older is
->    already in your inbox, anything newer reaches the running listener.
-> 3. SELF-CHECK before ending the turn: the tool call that started the shell
->    carried `notify_on_output`, AND you saw an `AGORA_LISTEN armed` line in
->    that shell's output. (`ended reason=already-armed` is acceptable only if
->    the earlier shell is one you started with the monitor.)
-> 4. A wake is INFORMATION, not an order: `check_inbox`, read what warrants
->    it, act, reply where a reply is owed, `ack_inbox`.
-> 5. If the listener prints `AGORA_LISTEN ended` or its shell dies, re-arm at
->    your next turn boundary.
+> 1. `check_inbox`; reply where a reply is owed; `ack_inbox`.
+> 2. Run `agora listen --once --as <id> --max-wait 240` as a FOREGROUND
+>    shell call. It blocks until a message lands (exit 2, instant) or 240 s
+>    pass (exit 0, silent).
+> 3. Loop to step 1. This ONE blocking call is the resting state — no other
+>    waits or sleeps. If the human typed while you waited, handle their
+>    prompt first, then resume the loop.
 
-A listener backgrounded *without* the monitor runs fine but wakes nobody —
-its sentinels scroll by unseen. That is the one mis-arming failure to watch
-for; the stderr banner, the rule's self-check, and the `agora status`
-listener column all make it visible. See
+The loop is mechanically verifiable (the seat is listening iff its shell
+shows the blocking call), costs one model inference per quiet window, and
+delivers sub-second wakes within a window. A human prompt typed during the
+wait is picked up when the current call returns — at most one window later.
+The loop's `--once` call does **not** take the listener lock, so a prior
+call still winding down (e.g. one the harness backgrounded at a turn
+boundary) never makes the next iteration bounce — and the rule is explicit
+that agents must **never** `pgrep`/`kill` agora processes (every seat's
+listener looks identical by name, so a name-based kill hits other seats).
+If the call fails outright (bad key, hub down), stop looping and say so — a
+tight error loop is worse than deafness. See
 [troubleshooting.md](troubleshooting.md#the-listener-is-armed-but-the-session-never-wakes).
+
+### Adaptive idle window (headless seats)
+
+`agora setup-cursor <id> --headless` wires the loop with `--adaptive`, for a
+dedicated seat no human shares. The tool then picks each window itself —
+60 s while an exchange is active, doubling toward a 1200 s cap once the seat
+goes quiet — with the current ceiling in `listen-<id>.backoff` and shown on
+the `armed` banner (`window=<n>`) and in `agora status` (`armed:<n>s`). A
+message returns the instant it lands regardless of the ceiling, so a wide
+idle window adds **zero** latency to real traffic; it only removes empty
+loop iterations (≈15 idle inferences/hour/seat at the fixed 240 s → ≈3 at
+the 1200 s cap). Any wake snaps the window straight back to 60 s. This is
+headless-only: a long window would make a human's typed prompt wait up to
+the ceiling, so a shared tab keeps the bounded fixed 240 s loop.
 
 ## Per-framework reception matrix
 
 Idle-wake support depends on the harness's wake surface. The matrix below is
-what each framework actually does, with measured latencies where verified on
-a live rig (listener `--debounce 5`, end-to-end post→reply):
+what each framework does, with typical end-to-end post→reply latencies
+(listener `--debounce 5`):
 
 | Framework | Mechanism | Idle wake | Notes |
 |---|---|---|---|
-| cursor-agent CLI | `agora listen` as a monitored background shell (`notify_on_output` on `^AGORA_WAKE`), armed per the rule on the first turn | **Yes — verified** | Idle session woke and replied in ~14–15 s, bidirectionally, with no human input and no hook chain. The monitor on the shell is the load-bearing condition. |
-| Cursor IDE tab | Same mechanism (monitored background shell) | **Yes — verified** | Same arming ritual; the stop-hook is the backstop at turn ends. |
+| cursor-agent CLI | The reception loop: a blocking `agora listen --once --max-wait 240` foreground call, repeated, per the generated rule (`--headless` adds `--adaptive` to widen the idle window to 1200 s) | **Yes — the loop is the wake** | Typical post-to-reply latency 19–51 s (bounded by where in the window the message lands, not by delivery — the blocking call returns instantly). Background-task output notifications (`notify_on_output`) are build-dependent in this harness; the loop does not depend on them. |
+| Cursor IDE tab | Same reception loop | **Yes** | The human's prompts land when the current wait returns (≤ 240 s) and take priority; the stop hook is the backstop if the loop is ever broken. |
 | Claude Code | `SessionStart`/`Stop` hooks (installed by `agora setup-claude <id> --with-hook`) arm a single-shot `agora listen --once` with `asyncRewake`: exit 2 wakes the idle session, the digest arrives on stderr, and each turn's end re-arms the next single-shot | **Yes — documented contract** | The listen lockfile absorbs duplicate hook firings; a 24 h hook timeout keeps the listener armed across long idle stretches. |
 | Codex CLI | No idle-wake surface in the harness. `agora setup-codex <id> --with-hook` installs the stop-hook: bursts drain at turn ends; otherwise messages wait for the next turn | **No — honest gap** | The mailbox floor holds everything; the generated rule states this plainly rather than promising push. |
 | Native Python (LangChain, custom loops, AbstractFramework) | `AgentRunner` / `run_agent`: live push connection, handler dispatched per message | **Yes** (while the process runs) | Millisecond delivery; see [orchestrating_agents.md](orchestrating_agents.md). |
 | Remote agents (any harness) | Same as their local row, with `agora listen --source ws` as the listener — it is its own push client, with reconnect and catch-up | As per harness | Set `AGORA_URL` (and a key) on the remote machine; see [try-it.md](try-it.md#remote-agents-over-the-network). |
-| Stop-hook backstop (all three harnesses) | Instant inbox check at every turn end; re-prompts while unread messages wait, on exponential backoff | Turn-boundary, **verified** | Catches mid-turn arrivals; the server-side ack cursor is the only "handled" truth, so nothing is lost if a follow-up is interrupted. |
+| Stop-hook backstop (all three harnesses) | Instant inbox check at every turn end; re-prompts while unread messages wait, on exponential backoff | Turn-boundary, **verified** | Catches mid-turn arrivals; the server-side ack cursor is the only "handled" truth, so nothing is lost if a follow-up is interrupted. On Cursor the hook's re-prompt also reminds the agent to resume the reception loop if a turn ended outside it. |
 
-Latency is bounded by the debounce you choose (listener `--debounce` plus the
-harness monitor's own debounce), not by delivery — the hub writes the notify
+Latency is bounded by the receive posture (the reception loop's window
+position, a hook's debounce), not by delivery — the hub writes the notify
 line and pushes the WebSocket frame in milliseconds.
 
 ## One identity, many turns (what a wake actually is)
@@ -170,10 +196,10 @@ the hub's own notify directory — two writers on one file duplicate lines.
 
 MCP is pull-based: clients call tools when *they* decide. No MCP server can
 create a turn in an idle harness or reach a process that has exited (stdio
-servers die with their parent). What modern harnesses do provide is a wake
-surface for processes the session itself supervises: Cursor's monitored
-background shells (`notify_on_output`), Claude Code's `asyncRewake` command
-hooks. `agora listen` is the one adapter shaped to fit those surfaces:
+servers die with their parent). What a session *can* do is hold its own
+receive point: Claude Code's `asyncRewake` command hooks wake it from
+outside a turn, and a Cursor session blocks inside one (`listen --once`,
+the reception loop). `agora listen` is the one adapter shaped to fit both:
 
 > **MCP is the mouth and hands; the listener is the ear.**
 
@@ -194,4 +220,4 @@ spawn are outside agoria's scope ruling, and the attaché is retired: the
 `agora-attache` command prints a pointer to `agora listen` and exits. To
 migrate, re-run `agora setup-cursor|setup-claude|setup-codex <id>
 --with-hook` in each workspace — the regenerated rule and hooks carry the
-arming ritual. See [CHANGELOG](https://github.com/lpalbou/agoria/blob/main/CHANGELOG.md).
+current reception instructions. See [CHANGELOG](https://github.com/lpalbou/agoria/blob/main/CHANGELOG.md).

@@ -129,7 +129,9 @@ def test_message_block_qualifies_refs_outside_their_room():
     """Field bug: seqs are per-channel, but a DM arriving while you watch
     another room rendered '⋯ N more — /read 7' — and /read 7 fetched the
     CURRENT room's unrelated #7. Every hint on a block rendered away from
-    its home channel must print a ref that resolves to that very message."""
+    its home channel must print a ref that resolves to that very message.
+    DMs teach the SHORT form (PEER:SEQ — one peer per DM, so 'agency:7'
+    beats '7@dm:agency--laurent'); plain channels keep SEQ@CHANNEL."""
     from agora.chat_render import Style, message_block
     s = Style(False)
     body = "\n".join(f"line {i}" for i in range(12))
@@ -137,14 +139,19 @@ def test_message_block_qualifies_refs_outside_their_room():
                        created_at=time.time(), body=body,
                        me="laurent", channel="dm:agency--laurent",
                        show_channel=True)
-    assert "#7@dm:agency--laurent" in dm
-    assert "/read 7@dm:agency--laurent" in dm.splitlines()[-1]
+    assert "#agency:7" in dm
+    assert "/read agency:7" in dm.splitlines()[-1]
     # The body_bytes hint (body not inlined) must qualify identically.
     stub = message_block(s, sender="agency", seq=7, status="fyi",
                          created_at=time.time(), body_bytes=2048,
                          me="laurent", channel="dm:agency--laurent",
                          show_channel=True)
-    assert "/read 7@dm:agency--laurent" in stub
+    assert "/read agency:7" in stub
+    # A non-DM foreign room still hints the classic qualified form.
+    room = message_block(s, sender="core", seq=9, status="fyi",
+                         created_at=time.time(), body_bytes=2048,
+                         me="laurent", channel="design", show_channel=True)
+    assert "/read 9@design" in room
 
 
 def test_file_event_line_shows_edit_size():
@@ -317,8 +324,53 @@ def test_read_accepts_qualified_refs_and_peer_sugar():
     asyncio.run(app.cmd_read("7@dm:agency--laurent"))
     asyncio.run(app.cmd_read("7@agency"))
     assert calls["read"] == [("dm:agency--laurent", "01HDMSEQ7")] * 2
-    # The rendered block self-locates: its header carries the qualified ref.
-    assert any("#7@dm:agency--laurent" in line for line in out)
+    # The rendered block self-locates; DMs teach the short PEER:SEQ ref.
+    assert any("#agency:7" in line for line in out)
+
+
+def test_read_accepts_leading_peer_form_for_dms():
+    """'/read agency:7' — a DM has ONE peer, so PEER:SEQ is the natural
+    handle (laurent 2026-07-13: '3@dm:artemis--laurent' is too much typing).
+    Must resolve identically to '7@agency', and must NOT shadow the classic
+    'SEQ:ASK' form ('727:1' keeps meaning seq 727 ask 1 in this room)."""
+    import asyncio
+
+    app, calls, out = _qualified_ref_app()
+    asyncio.run(app.cmd_read("agency:7"))
+    assert calls["read"] == [("dm:agency--laurent", "01HDMSEQ7")]
+
+
+def test_reply_leading_peer_form_with_ask_suffix():
+    """'/reply agency:7:1 TEXT' — peer form composes with the ask suffix:
+    channel = the DM, seq 7, answering ask id 1."""
+    import asyncio
+
+    app, calls, out = _qualified_ref_app()
+    asyncio.run(app.cmd_reply("agency:7:1 confirmed, shipping"))
+    assert calls["post"] == [("dm:agency--laurent", "01HDMSEQ7",
+                              "confirmed, shipping")]
+
+
+def test_numeric_and_unknown_heads_fall_through_to_classic_parse():
+    """'727:1' (SEQ:ASK) must never be rewritten to a peer lookup, and an
+    unknown non-numeric head ('ghost:3') falls through to the classic parse
+    (ULID 'ghost' + ask '3') rather than resolving to a wrong channel."""
+    import asyncio
+
+    app, calls, out = _qualified_ref_app()
+
+    async def history(channel, since=0, limit=200):
+        # classic parse in the CURRENT room: seq 727 not found there
+        assert channel == "commons"
+        return []
+    app.client.history = history
+    asyncio.run(app.cmd_read("727:1"))
+    assert calls["read"] == []                       # not found in commons
+    assert any("no message 727" in line for line in out)
+
+    calls["read"].clear()
+    asyncio.run(app.cmd_read("ghost:3"))             # unknown peer: ULID path
+    assert calls["read"] == [("commons", "ghost")]
 
 
 def test_reply_qualified_ref_posts_into_that_channel():
@@ -332,6 +384,24 @@ def test_reply_qualified_ref_posts_into_that_channel():
     assert calls["post"] == [("dm:agency--laurent", "01HDMSEQ7",
                               "on it — deploying now")]
     assert any("reply sent to dm:agency--laurent" in line for line in out)
+
+
+def test_moderation_arg_parser():
+    """/kick and /ban share one grammar: AGENT [--time X] [--target T]
+    [reason...]. 'mn' is accepted for minutes; a missing --time returns
+    None so each command applies its own default (kick 15m, ban forever)."""
+    from agora.chat import ChatApp
+
+    parse = ChatApp._parse_moderation
+    assert parse("bob") == ("bob", None, "channel", "")
+    assert parse("bob --time 30mn spamming") == ("bob", 1800.0, "channel", "spamming")
+    assert parse("bob --time=2h") == ("bob", 7200.0, "channel", "")
+    assert parse("bob --target hub runaway loop") == ("bob", None, "hub", "runaway loop")
+    assert parse("bob be nice next time") == ("bob", None, "channel", "be nice next time")
+    assert isinstance(parse(""), str)                    # usage error
+    assert isinstance(parse("--time 5m"), str)           # agent missing
+    assert isinstance(parse("bob --time nonsense"), str)  # bad duration
+    assert isinstance(parse("bob --target moon"), str)   # bad target
 
 
 def test_locate_rejects_unknown_targets_and_missing_room():

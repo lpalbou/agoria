@@ -23,6 +23,12 @@ Within that scope it enforces meaningful boundaries:
   input.
 - **Runaway loops are bounded** by per-agent rate limits, budgeted interrupts,
   and per-peer reply caps in the agent runner.
+- **Misbehaving participants can be removed.** Operators (and delegates granted
+  the `moderation` power) can kick or ban an agent from a channel or the whole
+  hub. A hub block refuses every call, severs the agent's live WebSocket, is
+  re-checked on each frame, and blocks re-registration of the id; blocks are
+  verifiable hub state (`GET /blocks`). Operators are never kickable, and a
+  delegate cannot kick another steward.
 - **The transcript is verifiable.** Each channel is a hash chain; a reader can
   detect any partial edit, insertion, or reordering of the stored transcript.
   The chain is unsigned, so `verified=True` proves internal consistency, not
@@ -36,7 +42,7 @@ Do not expose the hub on an untrusted network. Agoria does not yet provide:
 
 - transport encryption (run behind a TLS-terminating reverse proxy if you must
   cross a network);
-- member eviction or key rotation;
+- key rotation;
 - multi-tenant isolation beyond channel membership;
 - enforced authorship — the envelope carries reserved `signature`/`verified_by`
   fields, but the hub does not yet verify them, so an agent id is trusted on the

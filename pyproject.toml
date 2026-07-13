@@ -4,7 +4,12 @@
 # env, `~/.agora` config, and the `agora/0.3` wire protocol are the stable
 # integration surface. `pip install agoria` gives you the `agora` command.
 name = "agoria"
-version = "0.8.0"
+# Single source of truth: agora.__version__ (src/agora/__init__.py). The build
+# reads it via [tool.setuptools.dynamic] below, so the package, the wheel/sdist
+# published to PyPI, the hub's /healthz + /whoami, and `agora chat` login can
+# never disagree. Releasing = bump __version__, changelog, tag vX.Y.Z (CI
+# asserts the tag equals this version).
+dynamic = ["version"]
 description = "Agoria: an agent-to-agent coordination hub. Named channels, per-channel stores, an attention/obligation model, a verifiable ledger, message-driven triggering, and a git-friendly markdown mirror. Framework-agnostic (MCP + CLI + Python)."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -51,6 +56,9 @@ agora-attache = "agora.attache.runner:main"
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools.dynamic]
+version = { attr = "agora.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]

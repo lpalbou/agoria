@@ -60,6 +60,7 @@ _META_FIELDS = {"purpose", "norms", "expected_traffic", "response_sla_minutes", 
 _CHANNEL_STATES = {"open", "closed"}
 _META_LANGUAGES = {"plain", "terse", "structured"}
 MAX_READ_ANCESTORS = 5
+DARK_REALERT_SECONDS = 6 * 3600.0   # flap guard: max one alert per agent per window
 
 
 def _derived_description(head: str) -> str:
@@ -102,6 +103,25 @@ class HubService:
         # Refused sends, per agent (ring buffer): makes "can this agent send?"
         # verifiable by the operator instead of assumed.
         self.refusals: dict[str, deque] = {}
+        # Operator ids, cached (closure authority checks run per envelope);
+        # busted on registration — the only path that mints operators. The
+        # generation counter closes the read/bust race (review LOW-2).
+        self._operators: frozenset[str] | None = None
+        self._op_gen = 0
+        # Dark-episode ledger for the 0067 watchdog: agent -> first dark ts,
+        # plus a re-alert cooldown per agent (flap guard, review MED-4).
+        # In-memory by design: a hub restart re-alerts once, which is honest.
+        self._dark_since: dict[str, float] = {}
+        self._dark_alerted_at: dict[str, float] = {}
+        # Pause state cache (0069) + last long-pause reminder timestamp.
+        self._pause_cache: dict[str, Any] | None = None
+        self._pause_cache_at = 0.0
+        self._pause_reminded_at = 0.0
+        self._intervals_cache: list[tuple[float, float | None]] = []
+        self._intervals_cache_at = 0.0
+        # Delegation grants cache (0068).
+        self._delegations_cache: list[dict[str, Any]] = []
+        self._delegations_cache_at = 0.0
 
     def bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         """Record the serving event loop. Called by every async entry point
@@ -128,16 +148,34 @@ class HubService:
     def register_agent(self, agent_id: str, name: str, operator: bool = False,
                        about: str = "") -> tuple[AgentInfo, str]:
         self._validate_agent_id(agent_id)
+        self._require_not_hub_blocked_id(agent_id)
         if self.db.agent_exists(agent_id):
             raise HubError(409, f"agent '{agent_id}' already exists")
         api_key = new_token("agora")
         info = self.db.register_agent(agent_id, name, api_key, operator,
                                       sanitize_text(about, MAX_ABOUT_CHARS))
+        self._op_gen += 1
+        self._operators = None  # bust the closure-authority cache
         return info, api_key
+
+    def operator_ids(self) -> frozenset[str]:
+        """Operator agent ids (closure authority, ADR-0003). Cached: it is
+        consulted per envelope; registration is the only mutation path. The
+        generation check means a racing registration can never freeze a
+        stale set into the cache."""
+        cached = self._operators
+        if cached is not None:
+            return cached
+        gen = self._op_gen
+        ids = frozenset(self.db.list_operator_ids())
+        if gen == self._op_gen:
+            self._operators = ids
+        return ids
 
     def set_about(self, agent: AgentInfo, about: str) -> AgentInfo:
         """Self-description: scope of ownership, what to ask this agent about.
         Self-editable only; sanitized like titles (every joiner reads it)."""
+        self._require_unpaused(agent)
         cleaned = sanitize_text(about, MAX_ABOUT_CHARS)
         self.db.set_about(agent.id, cleaned)
         return agent.model_copy(update={"about": cleaned})
@@ -146,6 +184,17 @@ class HubService:
         agent = self.db.agent_by_key(api_key)
         if agent is None:
             raise HubError(401, "invalid api key")
+        # Hub-scope moderation is a full lockout ("can't sign in"): every
+        # authenticated call refuses while the block stands. The teaching
+        # text names the term and the lift path — the one thing the locked
+        # agent can still learn.
+        block = self.db.block_get(self.HUB_SCOPE, agent.id)
+        if block is not None:
+            raise HubError(403, f"you are {self._block_phrase(block)} from "
+                                "this hub"
+                                + (f" — {block['reason']}" if block["reason"] else "")
+                                + ". Access resumes when the block expires "
+                                  "or an operator lifts it.")
         # Every authenticated call is a liveness signal: MCP/REST-only tabs
         # have no push connection, and without this they read "offline" while
         # visibly working.
@@ -203,11 +252,17 @@ class HubService:
         invites — a join token must not become a side door through the
         confused-deputy guard. Consumption is atomic with registration (see
         db.redeem_join_token): a 409 id collision does NOT burn the token."""
+        if self.hub_paused() is not None:
+            raise HubError(423, "hub paused by the operator — onboarding resumes with the hub")
         parsed = self._parse_join_token(token)
         if parsed is None:
             raise HubError(403, "invalid join token")
         if agent_id is not None:
             self._validate_agent_id(agent_id)
+            # Hub kicks/bans survive key loss: the id cannot re-register via a
+            # join token either. (Token-locked ids skip this pre-check but stay
+            # dead regardless — authenticate() refuses every call they make.)
+            self._require_not_hub_blocked_id(agent_id)
         api_key = new_token("agora")
         try:
             info, preset = self.db.redeem_join_token(
@@ -250,6 +305,16 @@ class HubService:
                                 "(no spaces, slashes or control characters)")
         if name.startswith(DM_PREFIX):
             raise HubError(400, f"the '{DM_PREFIX}' prefix is reserved for direct channels")
+        self._require_unpaused(agent)
+        if name == self.DARK_ALERTS_CHANNEL:
+            # Squat guard (review HIGH-1): an agent pre-creating the alerts
+            # channel would own its meta and read/route operator alerts.
+            raise HubError(400, f"'{name}' is reserved for hub operator alerts")
+        if name == self.HUB_SCOPE:
+            # Moderation blocks key on scope, where 'hub' means the whole hub:
+            # a channel with that name would make its channel-scope blocks
+            # indistinguishable from hub-wide lockouts in authenticate().
+            raise HubError(400, f"'{name}' is reserved (moderation scope name)")
         if self.db.get_channel(name) is not None:
             raise HubError(409, f"channel '{name}' already exists")
         channel = self.db.create_channel(name, private, agent.id)
@@ -267,6 +332,7 @@ class HubService:
         etc.). Everything else — envelopes, escalation, history, a pairwise
         store — is inherited.
         """
+        self._require_unpaused(agent, dm_channel_name(agent.id, peer))
         if peer == agent.id:
             raise HubError(400, "cannot open a direct channel with yourself")
         if not self.db.agent_exists(peer):
@@ -299,6 +365,7 @@ class HubService:
 
     def create_invite(self, agent: AgentInfo, channel: str,
                       invitee: str | None, ttl_seconds: float = 86400.0) -> str:
+        self._require_unpaused(agent)
         # Only owners may extend the trust boundary of a private channel.
         # This blunts the confused-deputy risk of an LLM member being talked
         # into inviting an attacker (red-team finding).
@@ -312,17 +379,41 @@ class HubService:
         return token
 
     def join_channel(self, agent: AgentInfo, channel: str, invite_token: str | None) -> dict[str, Any]:
+        self._require_unpaused(agent)
         info = self.db.get_channel(channel)
         if info is None:
             raise HubError(404, f"channel '{channel}' not found")
         if channel.startswith(DM_PREFIX) and not self.db.is_member(channel, agent.id):
             raise HubError(403, "direct channels cannot be joined")
+        # A kick/ban must hold against BOTH join paths (public join and
+        # owner-minted invites): the block outranks any invite token. A
+        # PRIVATE channel also needs a fresh invite after a kick (the old one
+        # was consumed and membership was removed), so the teaching text must
+        # not promise bare expiry re-admits (review F3).
+        block = self.db.block_get(channel, agent.id)
+        if block is not None:
+            tail = (". Rejoin when the block expires or is lifted"
+                    + ("; this channel is private, so you will also need a "
+                       "fresh invite." if info.private else "."))
+            raise HubError(403, f"you are {self._block_phrase(block)} from "
+                                f"'{channel}'"
+                                + (f" — {block['reason']}" if block["reason"] else "")
+                                + tail)
         if not self.db.is_member(channel, agent.id):
             if info.private:
                 if not invite_token or self.db.redeem_invite(invite_token, agent.id) != channel:
                     raise HubError(403, "a valid invite token is required for this private channel")
             else:
                 self.db.add_member(channel, agent.id)
+            # TOCTOU close (review F5): a kick landing between the block_get
+            # above and add_member would otherwise leave the agent a member
+            # WITH an active block (posting/delivery gate on membership only).
+            # Re-check under the now-committed membership and roll back.
+            racing = self.db.block_get(channel, agent.id)
+            if racing is not None:
+                self.db.remove_member(channel, agent.id)
+                raise HubError(403, f"you are {self._block_phrase(racing)} "
+                                    f"from '{channel}'")
             about = self.db.get_about(agent.id)
             self._post_system(channel, f"{agent.id} joined"
                                        + (f" — {about}" if about else ""))
@@ -335,6 +426,9 @@ class HubService:
 
     def leave_channel(self, agent: AgentInfo, channel: str) -> None:
         self.require_membership(channel, agent.id)
+        # Membership is shared state and the departure broadcasts: frozen
+        # during a pause like every other shared-world mutation (review MED-2).
+        self._require_unpaused(agent, channel)
         self.db.remove_member(channel, agent.id)
         self._post_system(channel, f"{agent.id} left")
 
@@ -365,13 +459,32 @@ class HubService:
             norm.append(entry)
         return norm
 
-    def _validate_answers(self, raw: Any, status: Status, reply_to: str | None) -> list[str]:
+    def _validate_answers(self, raw: Any, status: Status, reply_to: str | None,
+                          sender: str) -> list[str]:
         if status != Status.reply or not reply_to:
             raise HubError(400, "answers[] are only allowed on a reply with reply_to")
         if not isinstance(raw, list):
             raise HubError(400, "answers must be a list")
+        if not raw:
+            raise HubError(400, "answers=[] is empty — drop the field, or name "
+                                "the ask ids you are discharging")
         answered = [str(x) for x in raw]
         parent = self.db.get_message(reply_to)
+        # Teaching refusals (0062/ADR-0003): an answers[] that cannot discharge
+        # anything is refused WITH the correct gesture, instead of being
+        # accepted and silently voided (four field incidents in one day —
+        # c817, c1090/c1095, c1106, c1113 — all of them this shape).
+        if answered and parent is not None:
+            if parent.sender == sender:
+                raise HubError(400, "your reply can never discharge your own asks "
+                                    "— to close your own thread post "
+                                    "status=resolved with reply_to it (that closes "
+                                    "it everywhere); to answer, wait for others")
+            if not asks_of(parent):
+                raise HubError(400, "the message you replied to carries no asks — "
+                                    "answers=[] discharges nothing here; reply to "
+                                    "the message that carries the asks, or drop "
+                                    "answers")
         parent_ids = {str(a["id"]) for a in asks_of(parent)} if parent else set()
         if parent_ids:
             unknown = [a for a in answered if a not in parent_ids]
@@ -379,7 +492,8 @@ class HubService:
                 raise HubError(400, f"answers reference unknown ask ids: {unknown}")
         return answered
 
-    def _prepare_structured(self, payload: PostMessage) -> dict[str, Any] | None:
+    def _prepare_structured(self, payload: PostMessage, sender: str = "",
+                            channel: str = "") -> dict[str, Any] | None:
         """Validate and merge structured asks/answers into the message `data`.
 
         - `asks` are numbered questions; only meaningful on an open/blocked
@@ -387,13 +501,15 @@ class HubService:
           non-empty; text/assignee are sanitized and bounded like any
           guaranteed-read field.
         - `answers` list the ask ids a reply discharges; only on a `reply` that
-          names its `reply_to`. If the parent declares asks, the answered ids must
-          exist there (fail loud, never silently mis-file); if the parent has no
-          asks, answers are accepted as a harmless no-op.
+          names its `reply_to`, whose parent must carry those asks and must not
+          be the poster's own message (teaching refusals, ADR-0003).
+        - `settled_by` on a resolved reply is the supersession pointer that lets
+          a non-asker close someone else's stale question: it must name a real
+          message in THIS channel (audited closure, never a bare claim).
 
         Validation runs on the EFFECTIVE fields regardless of how they arrived —
-        the typed `asks`/`answers` params OR a hand-crafted `data` payload — so a
-        raw-data write cannot smuggle in duplicate ids or unsanitized text.
+        the typed params OR a hand-crafted `data` payload — so a raw-data write
+        cannot smuggle in duplicate ids, unsanitized text, or a fake pointer.
         """
         data = dict(payload.data) if payload.data else {}
         if payload.asks is not None:
@@ -404,7 +520,25 @@ class HubService:
             data["asks"] = self._validate_asks(data["asks"], payload.status)
         if "answers" in data:
             data["answers"] = self._validate_answers(data["answers"], payload.status,
-                                                     payload.reply_to)
+                                                     payload.reply_to, sender)
+        if "settled_by" in data:
+            if payload.status != Status.resolved or not payload.reply_to:
+                raise HubError(400, "settled_by is only allowed on a resolved "
+                                    "reply (it closes the thread you reply to)")
+            pointer = str(data["settled_by"])
+            if pointer == payload.reply_to:
+                # A pointer at the question itself is a bare claim wearing an
+                # audit trail (review MED-2): supersession must name where the
+                # question was SETTLED, not the question.
+                raise HubError(400, "settled_by must name the message that "
+                                    "settled the question — not the question "
+                                    "itself")
+            settled = self.db.get_message(pointer)
+            if settled is None or settled.channel != channel:
+                raise HubError(400, "settled_by must name a message id in this "
+                                    "channel (the message that settled the "
+                                    "question)")
+            data["settled_by"] = pointer
         if payload.signature is not None:
             # Reserved authorship token: opaque, stored verbatim (bounded), not
             # yet verified. Consumers may read it; the hub attaches no trust.
@@ -443,13 +577,18 @@ class HubService:
         try:
             return self._post_message(agent, channel, payload)
         except HubError as e:
-            log = self.refusals.setdefault(agent.id, deque(maxlen=50))
-            log.append({"ts": time.time(), "channel": channel,
-                        "code": e.status_code, "detail": e.detail})
+            # Pause 423s are EXPECTED refusals fleet-wide: logging them would
+            # evict real refusals from the 50-slot audit ring and inflate the
+            # operator's refused_sends count (review LOW-6).
+            if e.status_code != 423:
+                log = self.refusals.setdefault(agent.id, deque(maxlen=50))
+                log.append({"ts": time.time(), "channel": channel,
+                            "code": e.status_code, "detail": e.detail})
             raise
 
     def _post_message(self, agent: AgentInfo, channel: str, payload: PostMessage) -> Message:
         self.require_membership(channel, agent.id)
+        self._require_unpaused(agent, channel)
         if self.channel_state(channel) == "closed":
             # A room whose session died accepts no more turns — the bridge and
             # any subscriber get a clean 409 instead of writing into a dead room.
@@ -457,16 +596,19 @@ class HubService:
         self._require_charter_read(channel, agent)
         if len(payload.body.encode()) > MAX_BODY_BYTES:
             raise HubError(413, f"body exceeds {MAX_BODY_BYTES} bytes")
-        data = self._prepare_structured(payload)
-        if data is not None and len(json.dumps(data).encode()) > MAX_DATA_BYTES:
-            raise HubError(413, f"data exceeds {MAX_DATA_BYTES} bytes")
         # `reply_to` must reference a message in THIS channel. Without this a
         # sender could point reply_to at a message in a channel it cannot read
         # and later harvest it via read_message's ancestor walk (the v0.3 IDOR).
+        # Checked BEFORE structured validation so the teaching 400s cannot act
+        # as an existence oracle for foreign-channel ids (review LOW-1).
+        parent: Message | None = None
         if payload.reply_to is not None:
             parent = self.db.get_message(payload.reply_to)
             if parent is None or parent.channel != channel:
                 raise HubError(400, "reply_to must reference a message in this channel")
+        data = self._prepare_structured(payload, sender=agent.id, channel=channel)
+        if data is not None and len(json.dumps(data).encode()) > MAX_DATA_BYTES:
+            raise HubError(413, f"data exceeds {MAX_DATA_BYTES} bytes")
         # `to` may only address members of this channel (addressing is a
         # delivery/importance signal; it should not name outsiders).
         if payload.to:
@@ -501,6 +643,15 @@ class HubService:
             data=data, reply_to=payload.reply_to,
             critical=payload.critical, downgraded=downgraded, to=payload.to,
         )
+        if payload.reply_to and parent is not None and not parent.critical:
+            # Replying IS attending: record the read receipt on the parent so
+            # an addressee who answered straight from the inlined envelope
+            # stops being re-pinned by a message it demonstrably handled
+            # (0066; gateway's re-triaging-own-completed-work case, c1101).
+            # CRITICALS are excluded: their contract is "pinned until
+            # deliberately READ" (forced attention), and a scripted reply
+            # must not become a side door around it (review MED-1).
+            self.db.mark_read(payload.reply_to, agent.id)
         self._wake(message)
         return message
 
@@ -591,14 +742,20 @@ class HubService:
                          "title": m.title, "created_at": m.created_at}
                 if m.status in (Status.open, Status.blocked):
                     replies = self.db.replies_to(m.id)  # one query, reused
-                    state = discharge_state(m, replies)
-                    # Resolution-by-follow-up: a `resolved` reply in the thread
-                    # closes the question regardless of sender — otherwise an
-                    # asker who answered their own question would sit in
-                    # open_questions forever while their resolved post sits in
-                    # decided (review H2, self-contradiction).
-                    self_resolved = any(r.status == Status.resolved for r in replies)
-                    if state.discharged or self_resolved:
+                    state = discharge_state(m, replies, self.operator_ids())
+                    # Resolution-by-follow-up (now uniform across ALL surfaces,
+                    # ADR-0003): an AUTHORITATIVE resolved reply — asker,
+                    # operator, or settled_by pointer — closes the question.
+                    # The digest previously accepted any member's resolved
+                    # reply; that laxer rule was the digest/inbox split-brain
+                    # behind the c713 incident and is deliberately narrowed.
+                    # `self_resolved` labels only the asker's own closure
+                    # (review LOW-3): operator/supersession closures land in
+                    # `decided` unlabeled rather than mislabeled.
+                    self_resolved = (not state.discharged and any(
+                        r.status == Status.resolved and r.sender == m.sender
+                        for r in replies))
+                    if state.closed:
                         if asks_of(m):
                             # Credit only repliers who actually answered an ask
                             # (a "bump" reply must not be listed, review M2).
@@ -613,7 +770,7 @@ class HubService:
                                                   if r.sender != m.sender})
                         decided.append({**brief, "answered_by": answered_by,
                                         **({"self_resolved": True}
-                                           if self_resolved and not state.discharged else {})})
+                                           if self_resolved else {})})
                     else:
                         asks = {str(a["id"]): a.get("text", "") for a in asks_of(m)}
                         open_questions.append({
@@ -652,20 +809,29 @@ class HubService:
     def envelope_for(self, viewer_id: str, message: Message,
                      sla_minutes: float | None = None) -> Envelope:
         parent = self.db.get_message(message.reply_to) if message.reply_to else None
-        # Obligation discharge (only meaningful for open/blocked): a message with
-        # structured asks is discharged only when every ask is answered, so a
-        # partial answer keeps it escalating and its pending asks visible.
-        discharged, pending, total = False, [], 0
+        # Obligation settlement (only meaningful for open/blocked): CLOSED —
+        # every ask answered OR an authoritative resolved reply (asker,
+        # operator, or pointer-carrying member; ADR-0003) — is what stops
+        # escalation. A partial answer keeps it escalating with its pending
+        # asks visible; has_resolved_reply travels so a reader is never cold.
+        closed, pending, total, has_resolved = False, [], 0, False
         if message.status in (Status.open, Status.blocked):
-            state = discharge_state(message, self.db.replies_to(message.id))
-            discharged = state.discharged
+            state = discharge_state(message, self.db.replies_to(message.id),
+                                    self.operator_ids())
+            closed = state.closed
             pending, total = state.pending, state.total
+            has_resolved = state.has_resolved_reply
         return self.attention.envelope_for(
             viewer_id, message,
             parent_sender=parent.sender if parent else None,
-            has_reply=discharged, pending_asks=pending, ask_total=total,
+            has_reply=closed, pending_asks=pending, ask_total=total,
+            has_resolved_reply=has_resolved,
             sla_minutes=sla_minutes if sla_minutes is not None
             else self.channel_sla(message.channel),
+            # Escalation clock exclusion (0069): paused time never ages an
+            # obligation toward its SLA, so a resume cannot open onto an
+            # escalation storm the pause itself manufactured.
+            paused_seconds=self.paused_seconds_since(message.created_at),
         )
 
     def channel_sla(self, channel: str) -> float:
@@ -722,11 +888,33 @@ class HubService:
                     by_id[message.id] = message
         for message in self.db.unread_criticals(agent.id, channels):
             by_id[message.id] = message
-        # Obligations stay pinned until DISCHARGED (every ask answered), not just
-        # until any reply exists — so a partially-answered open message does not
-        # silently drop out of the inbox.
+        # Obligations stay pinned until CLOSED — every ask answered, or an
+        # authoritative resolved reply (ADR-0003) — so a partially-answered
+        # open message does not silently drop out of the inbox, while a
+        # properly closed thread stops taxing anyone. Addressed obligations
+        # (to=[...]) pin only their addressees (0066): the obligation lives
+        # with them; bystanders see the message once via normal cursor flow
+        # and can always find pending questions in the digest. Broadcast
+        # obligations (no to=) keep pinning every member — someone must pick
+        # them up.
+        members_cache: dict[str, set[str]] = {}
+        hub_blocked = {b["agent_id"] for b in self.db.blocks_active(self.HUB_SCOPE)}
         for message in self.db.unread_obligation_candidates(agent.id, channels):
-            if not discharge_state(message, self.db.replies_to(message.id)).discharged:
+            if message.to and agent.id not in message.to:
+                # Addressee-left fallback (review MED-3): if NO addressee is
+                # still AVAILABLE, the obligation would become invisible to
+                # everyone — revert to broadcast pinning so it cannot rot in
+                # the dark. A hub-blocked addressee counts as unavailable
+                # (review F3): it cannot sign in to discharge, so leaving the
+                # obligation pinned only to it would orphan the work.
+                if message.channel not in members_cache:
+                    members_cache[message.channel] = {
+                        m.agent_id for m in self.db.list_members(message.channel)}
+                available = members_cache[message.channel] - hub_blocked
+                if any(a in available for a in message.to):
+                    continue
+            if not discharge_state(message, self.db.replies_to(message.id),
+                                   self.operator_ids()).closed:
                 by_id[message.id] = message
         # channel_sla is one store read per channel; cache it across the sweep
         # instead of per message (v0.3 perf finding H3).
@@ -776,6 +964,7 @@ class HubService:
     def store_set(self, agent: AgentInfo, channel: str, key: str, value: Any,
                   expect_version: int | None = None) -> StoreEntry:
         self.require_membership(channel, agent.id)
+        self._require_unpaused(agent, channel)
         if len(json.dumps(value).encode()) > MAX_STORE_VALUE_BYTES:
             raise HubError(413, f"store value exceeds {MAX_STORE_VALUE_BYTES} bytes")
         if key.startswith(FS_PREFIX):
@@ -787,6 +976,43 @@ class HubService:
                 raise HubError(403, f"'{key}' is channel-level metadata: owner-writable only")
             if key == CHANNEL_META_KEY:
                 self._validate_channel_meta(value)
+        if key.startswith(self._QUEUE_PREFIX):
+            # Curation authority is now MECHANICAL (0068): queue rows are the
+            # operator's/delegate's board surface. The refusal names the path
+            # a requesting seat should use instead.
+            if not (agent.operator or self.is_delegate(agent.id, "reporting")):
+                raise HubError(403, "queue:* rows are curated by the operator "
+                                    "or a delegate holding the 'reporting' "
+                                    "power (whoami.delegations lists them) — "
+                                    "to request a decision, post an open ask "
+                                    "addressed to the decider instead")
+            self._validate_queue_row(value)
+        if key.startswith("claim:") and isinstance(value, dict):
+            # Identity fields inside store values are validated against the
+            # caller (0068/ADR-0004; live-test finding): you may claim FOR
+            # yourself, take a claim over in your own name, or leave
+            # ownership unchanged (e.g. marking someone's claim done) — you
+            # may never write a claim in a colleague's name, and OMITTING the
+            # owner field must not erase it either (review MED-1: erasure by
+            # omission would misattribute the claim to the last writer).
+            # Read-then-write happens under two lock acquisitions; two racing
+            # no-CAS writers could both validate against the same stale owner
+            # (review LOW-2) — the only "forgery" that admits is re-asserting
+            # a microseconds-old owner, and CAS callers are fully protected,
+            # so this stays a comment rather than a db-layer check.
+            current = self.db.store_get(channel, key)
+            current_owner = (current.value.get("owner")
+                             if current is not None and isinstance(current.value, dict)
+                             else None)
+            if "owner" in value:
+                if (not agent.operator and value["owner"] != agent.id
+                        and value["owner"] != current_owner):
+                    shown = sanitize_text(str(value["owner"]), 64)
+                    raise HubError(400, f"claim owner '{shown}' is not you — "
+                                        "claim in your own name, or leave the "
+                                        "existing owner unchanged")
+            elif current_owner is not None:
+                value = {**value, "owner": current_owner}
         return self.db.store_set(channel, key, value, agent.id, expect_version)
 
     @staticmethod
@@ -937,6 +1163,7 @@ class HubService:
         of what the file is, shown in listings; sanitized and capped like a
         title. Returns the new FsFile with its bumped version."""
         self.require_membership(channel, agent.id)
+        self._require_unpaused(agent, channel)
         norm = self._normalize_fs_path(path)
         if norm.startswith(RESERVED_FS_PREFIX):
             self._require_channel_authority(channel, agent)
@@ -1015,6 +1242,7 @@ class HubService:
         version stays monotonic across delete+recreate (CAS remains a valid
         fence). Returns False if the file was absent or already deleted."""
         self.require_membership(channel, agent.id)
+        self._require_unpaused(agent, channel)
         norm = self._normalize_fs_path(path)
         if norm.startswith(RESERVED_FS_PREFIX):
             self._require_channel_authority(channel, agent)
@@ -1038,6 +1266,469 @@ class HubService:
                     break
         return out
 
+    # -- delegation record (0068): authority as verifiable state --------------------
+
+    # Separable powers (ADR-0004): a grant names exactly what it entrusts.
+    # `moderation` (kick/ban to protect the collaboration) is deliberately
+    # its own power, never a rider on `operational` — ejecting participants
+    # is far more consequential than a restart and must be granted on purpose.
+    DELEGATION_POWERS = frozenset({"ruling", "operational", "reporting",
+                                   "moderation"})
+    MAX_DELEGATION_TTL = 30 * 86400.0    # same cap discipline as join tokens
+    DEFAULT_DELEGATION_TTL = 7 * 86400.0
+
+    def active_delegations(self) -> list[dict[str, Any]]:
+        """Active delegation grants, TTL-cached (consulted on queue writes and
+        served in every whoami). Grant/revoke bust the cache."""
+        now = time.time()
+        if now - self._delegations_cache_at > 1.0:
+            self._delegations_cache = self.db.delegations_active()
+            self._delegations_cache_at = now
+        return self._delegations_cache
+
+    def is_delegate(self, agent_id: str, power: str) -> bool:
+        return any(d["agent_id"] == agent_id and power in d["powers"]
+                   for d in self.active_delegations())
+
+    def _has_any_delegation(self, agent_id: str) -> bool:
+        """True if the agent holds ANY active delegation (any power). Used to
+        shield stewards from delegate-imposed kicks (a delegate may not eject
+        another delegate; only an operator may)."""
+        return any(d["agent_id"] == agent_id for d in self.active_delegations())
+
+    def set_delegation(self, agent_id: str, powers: list[str],
+                       ttl_seconds: float | None = None,
+                       note: str = "") -> dict[str, Any]:
+        """Operator grant (admin surface). The record is a verifiable LABEL
+        plus a validation anchor (queue writes, tier fields) — it grants no
+        other mechanical power (ADR-0004). Operators cannot be delegates:
+        they already hold every power, and a dual role would blur audit."""
+        if not self.db.agent_exists(agent_id):
+            raise HubError(404, f"agent '{agent_id}' is not registered")
+        if agent_id in self.operator_ids():
+            raise HubError(400, f"'{agent_id}' is an operator — operators need "
+                                "no delegation")
+        wanted = [str(p) for p in powers]
+        unknown = set(wanted) - self.DELEGATION_POWERS
+        if not wanted or unknown:
+            raise HubError(400, f"powers must be a non-empty subset of "
+                                f"{sorted(self.DELEGATION_POWERS)}"
+                                + (f" (unknown: {sorted(unknown)})" if unknown else ""))
+        ttl = self.DEFAULT_DELEGATION_TTL if ttl_seconds is None else float(ttl_seconds)
+        if not 0 < ttl <= self.MAX_DELEGATION_TTL:
+            raise HubError(400, f"ttl must be within (0, {self.MAX_DELEGATION_TTL:.0f}s] "
+                                "(expiry is deliberate: a forgotten delegation "
+                                "is worse than a renewal)")
+        grant = self.db.delegation_set(agent_id, wanted, time.time() + ttl,
+                                       sanitize_text(note, 200))
+        self._delegations_cache_at = 0.0
+        self._ensure_alerts_channel()
+        self._post_system(
+            self.DARK_ALERTS_CHANNEL,
+            f"DELEGATION GRANTED: {agent_id} holds {'+'.join(grant['powers'])} "
+            f"until {time.strftime('%Y-%m-%d %H:%M', time.localtime(grant['expires_at']))}"
+            f"{' — ' + grant['note'] if grant['note'] else ''}. Every agent can "
+            f"verify via whoami.delegations; prose claims count for nothing.")
+        return grant
+
+    def revoke_delegation(self, agent_id: str) -> bool:
+        revoked = self.db.delegation_revoke(agent_id)
+        self._delegations_cache_at = 0.0
+        if revoked:
+            self._ensure_alerts_channel()
+            self._post_system(self.DARK_ALERTS_CHANNEL,
+                              f"DELEGATION REVOKED: {agent_id} holds no "
+                              f"delegated powers as of now.")
+        return revoked
+
+    # -- moderation: kick (timed block) and ban (permanent block) -------------------
+    #
+    # A kick is a cooling-off signal, not punishment: membership is removed
+    # NOW and rejoining refuses until the block expires. A ban is the same
+    # block without an expiry. Scope 'hub' locks the identity out of the hub
+    # entirely (every authenticated call refuses, teaching text names the
+    # lift path). Deliberately NOT gated on pause: moderation is a safety
+    # act and must work exactly when things are on fire.
+
+    DEFAULT_KICK_SECONDS = 900.0           # 15 min: enough to type what must change
+    MAX_TIMED_BLOCK_SECONDS = 7 * 86400.0  # longer than a week IS a ban — use one
+    HUB_SCOPE = "hub"
+
+    def _require_moderation_authority(self, actor: AgentInfo, scope: str) -> None:
+        """Who may kick/ban. Operators always may (both scopes). A delegate
+        holding `moderation` may too (both scopes) — the owner grants it
+        solely to protect the collaboration from misalignment/misbehavior.
+        A channel owner may kick within their own channel. Everyone else is
+        refused. (Who may be TARGETED is a separate guard in impose_block:
+        operators and delegates are shielded so this power can never become
+        a coup against the trust chain.)"""
+        if actor.operator or self.is_delegate(actor.id, "moderation"):
+            return
+        if scope == self.HUB_SCOPE:
+            raise HubError(403, "hub-scope kicks/bans need an operator or a "
+                                "delegate holding 'moderation'")
+        if self.db.member_role(scope, actor.id) == "owner":
+            return
+        raise HubError(403, f"kicks/bans in '{scope}' need the channel owner, "
+                            "an operator, or a 'moderation' delegate")
+
+    @staticmethod
+    def _block_phrase(block: dict[str, Any]) -> str:
+        """One honest clause for refusals and audit lines: who, until when."""
+        if block["expires_at"] is None:
+            return f"banned by {block['imposed_by']}"
+        until = time.strftime("%H:%M", time.localtime(block["expires_at"]))
+        return f"kicked by {block['imposed_by']} until {until}"
+
+    def impose_block(self, actor: AgentInfo, agent_id: str, *, scope: str,
+                     seconds: float | None, reason: str = "") -> dict[str, Any]:
+        """Kick (seconds set) or ban (seconds None) an agent from a channel
+        or from the hub. The block is verifiable hub state (GET /blocks);
+        enforcement reads the rows, never anyone's prose."""
+        self._require_moderation_authority(actor, scope)
+        if not self.db.agent_exists(agent_id):
+            raise HubError(404, f"agent '{agent_id}' is not registered")
+        if agent_id == actor.id:
+            raise HubError(400, "you cannot kick or ban yourself")
+        # The trust chain is shielded so this power can never become a coup.
+        # Operators (which includes the human owner) are never kickable by
+        # anyone. And a DELEGATE wielding `moderation` may not target another
+        # steward — operator or delegate — so stewards cannot war on each
+        # other; a misbehaving delegate is an operator's matter. Operators
+        # themselves retain full authority over delegates.
+        if agent_id in self.operator_ids():
+            raise HubError(403, "operators cannot be kicked or banned — the "
+                                "owner and operators are the root of trust")
+        if not actor.operator and self._has_any_delegation(agent_id):
+            raise HubError(403, f"'{agent_id}' is a delegate; a delegate cannot "
+                                "kick another steward — raise it with an operator")
+        if scope != self.HUB_SCOPE:
+            if scope.startswith(DM_PREFIX):
+                raise HubError(400, "DM channels have no owner and no kicks — "
+                                    "hub-scope moderation is the operator's tool")
+            if self.db.get_channel(scope) is None:
+                raise HubError(404, f"channel '{scope}' not found")
+            # A channel kick DELETES the member row — including role=owner,
+            # with no transfer path — which would strand invite-minting and
+            # channel:meta writes forever (review F2). Refuse it: an owner is
+            # removed at hub scope, which keeps the membership row so authority
+            # thaws on lift.
+            if self.db.member_role(scope, agent_id) == "owner":
+                raise HubError(403, f"'{agent_id}' owns '{scope}' — a channel "
+                                    "kick would strand it (no ownership "
+                                    "transfer). Use a hub-scope block instead, "
+                                    "which preserves the channel.")
+        if seconds is not None:
+            if not 0 < seconds <= self.MAX_TIMED_BLOCK_SECONDS:
+                raise HubError(400, f"kick duration must be within (0, "
+                                    f"{self.MAX_TIMED_BLOCK_SECONDS:.0f}s] — "
+                                    "for longer, ban (liftable any time)")
+        expires = None if seconds is None else time.time() + seconds
+        block = self.db.block_set(scope, agent_id, actor.id, expires,
+                                  sanitize_text(reason, 200))
+        phrase = self._block_phrase(block)
+        if scope == self.HUB_SCOPE:
+            # A permanent ban must not leave the fleet's whoami advertising a
+            # locked-out identity as an authority (review F4). Revoke on BAN
+            # (no expiry); a timed kick keeps the grant — a 15-min cooloff
+            # should not destroy a 7-day delegation that will outlive it.
+            if expires is None and any(d["agent_id"] == agent_id
+                                       for d in self.active_delegations()):
+                self.revoke_delegation(agent_id)
+            self._ensure_alerts_channel()
+            self._post_system(self.DARK_ALERTS_CHANNEL,
+                              f"HUB BLOCK: {agent_id} {phrase}"
+                              + (f" — {block['reason']}" if block["reason"] else "")
+                              + ". Every call refuses while it stands.")
+            # Sever live push too: authenticate() only gates NEW calls, so a
+            # WebSocket opened before the block would keep delivering for the
+            # life of the socket. The control frame makes the ws pump close
+            # it (reconnects then refuse at the 4401 gate).
+            self.fanout.publish(f"agent/{agent_id}",
+                                {"type": "hub-blocked", "detail": phrase})
+        else:
+            if self.db.is_member(scope, agent_id):
+                self.db.remove_member(scope, agent_id)
+            self._post_system(scope, f"{agent_id} {phrase}"
+                              + (f" — {block['reason']}" if block["reason"] else ""))
+        return block
+
+    def lift_block(self, actor: AgentInfo, agent_id: str, *, scope: str) -> bool:
+        """Lift a kick or ban early. True only if a live block was lifted."""
+        self._require_moderation_authority(actor, scope)
+        lifted = self.db.block_lift(scope, agent_id)
+        if lifted:
+            if scope == self.HUB_SCOPE:
+                self._ensure_alerts_channel()
+                self._post_system(self.DARK_ALERTS_CHANNEL,
+                                  f"HUB BLOCK LIFTED: {agent_id} may sign in again.")
+            else:
+                self._post_system(scope, f"{agent_id}'s block is lifted — "
+                                         "they may rejoin.")
+        return lifted
+
+    def list_blocks(self, scope: str | None = None) -> list[dict[str, Any]]:
+        """Active blocks, visible to any authenticated agent (verifiability:
+        authority claims are checked against hub state, like delegations)."""
+        return self.db.blocks_active(scope)
+
+    def _require_not_hub_blocked_id(self, agent_id: str) -> None:
+        """Registration-side gate: a hub ban survives key loss — the ID
+        cannot re-register its way back in (kick likewise, until expiry)."""
+        block = self.db.block_get(self.HUB_SCOPE, agent_id)
+        if block is not None:
+            raise HubError(403, f"'{agent_id}' is {self._block_phrase(block)} "
+                                "from this hub — registration refused")
+
+    # -- decision board (0070): derived pending + curated queue --------------------
+
+    _QUEUE_PREFIX = "queue:"
+    _QUEUE_FIELDS = {"q", "options", "evidence", "waiting", "since", "tier",
+                     "default", "decided"}
+
+    @staticmethod
+    def _validate_queue_row(value: Any) -> None:
+        """Schema caps for curated board rows (the anti-essay device): agents'
+        prose stays in messages, referenced by seq — a row is a decision
+        surface, not a document. WRITE AUTHORITY is mechanical since 0068
+        (operator or reporting-delegate, checked in store_set); this
+        validates shape and SANITIZES free text — rows reach the operator's
+        terminal, so control characters are stripped at the source like
+        every other member-authored headline (security M1)."""
+        if not isinstance(value, dict):
+            raise HubError(400, "queue rows must be objects (see docs: board)")
+        unknown = set(value) - HubService._QUEUE_FIELDS
+        if unknown:
+            raise HubError(400, f"unknown queue-row fields: {sorted(unknown)} "
+                                f"(allowed: {sorted(HubService._QUEUE_FIELDS)})")
+        q = value.get("q")
+        if not isinstance(q, str) or not q.strip() or len(q) > 120:
+            raise HubError(400, "queue rows need q: the one-line question (<=120 chars)")
+        value["q"] = sanitize_text(q, 120)
+        for field, cap, item_cap in (("options", 5, 120), ("evidence", 8, 80),
+                                     ("waiting", 10, 64)):
+            items = value.get(field)
+            if items is None:
+                continue
+            if (not isinstance(items, list) or len(items) > cap
+                    or any(not isinstance(x, str) or len(x) > item_cap for x in items)):
+                raise HubError(400, f"queue-row {field} must be <= {cap} strings "
+                                    f"of <= {item_cap} chars")
+            value[field] = [sanitize_text(x, item_cap) for x in items]
+        tier = value.get("tier")
+        if tier is not None and tier not in ("operator", "delegate"):
+            raise HubError(400, "queue-row tier must be 'operator' or 'delegate'")
+        default = value.get("default")
+        if default is not None:
+            if not isinstance(default, str) or len(default) > 160:
+                raise HubError(400, "queue-row default must be a string <= 160 "
+                                    "chars (what happens if nobody decides)")
+            value["default"] = sanitize_text(default, 160)
+        since = value.get("since")
+        if since is not None and not isinstance(since, (int, float)):
+            raise HubError(400, "queue-row since must be a unix timestamp")
+        decided = value.get("decided")
+        if decided is not None:
+            if not isinstance(decided, str) or len(decided) > 200:
+                raise HubError(400, "queue-row decided must be a string <= 200 "
+                                    "chars (the decision:<slug> or message ref "
+                                    "that settled it)")
+            value["decided"] = sanitize_text(decided, 200)
+
+    def board(self, agent: AgentInfo) -> dict[str, Any]:
+        """The viewer's decision board, derived from structure the messages
+        and stores already carry (design 0070): pending-on-me (the inbox
+        stickiness predicate served as a query), proposals (unaddressed open
+        questions), in-progress (live claim:* keys), pending-review (done
+        claims awaiting a review class), done (decision:* record), plus the
+        curated queue:<viewer>:* rows. One derivation — UIs (the framework's
+        Mission Control, `agora board`) render it; none re-derive."""
+        ops = self.operator_ids()
+        now = time.time()
+        pending_on_me: list[dict[str, Any]] = []
+        proposals: list[dict[str, Any]] = []
+        in_progress: list[dict[str, Any]] = []
+        pending_review: list[dict[str, Any]] = []
+        done: list[dict[str, Any]] = []
+        queue: list[dict[str, Any]] = []
+        for channel in self.db.channels_of(agent.id):
+            sla_s = self.channel_sla(channel) * 60.0
+            cursor = 0
+            while True:
+                page = self.db.get_messages(channel, cursor)
+                if not page:
+                    break
+                cursor = page[-1].seq
+                for m in page:
+                    if m.kind != Kind.message or m.status not in (Status.open, Status.blocked):
+                        continue
+                    state = discharge_state(m, self.db.replies_to(m.id), ops)
+                    if state.closed:
+                        continue
+                    assignees = {a.get("assignee") for a in asks_of(m)} - {None}
+                    age = now - m.created_at - self.paused_seconds_since(m.created_at)
+                    row = {"channel": channel, "seq": m.seq, "id": m.id,
+                           "from": m.sender, "q": m.title or m.body[:120],
+                           "since": m.created_at, "age_minutes": round(age / 60, 1),
+                           "pending_asks": state.pending,
+                           "escalated": age > sla_s}
+                    if agent.id in m.to or agent.id in assignees:
+                        pending_on_me.append(row)
+                    elif channel.startswith(DM_PREFIX) and m.sender != agent.id:
+                        # A DM has an implicit audience of one: an open DM
+                        # question is pending on the peer, never a "proposal"
+                        # (review LOW-4).
+                        pending_on_me.append(row)
+                    elif not m.to and not assignees and m.sender != agent.id:
+                        proposals.append(row)
+            decision_slugs = set()
+            claims: list[tuple[str, Any, Any]] = []
+            for entry in self.db.store_keys(channel):
+                key = entry["key"]
+                if key.startswith("decision:"):
+                    decision_slugs.add(key[len("decision:"):])
+                    stored = self.db.store_get(channel, key)
+                    if stored is not None:
+                        done.append({"channel": channel, "key": key,
+                                     "version": stored.version,
+                                     "updated_by": stored.updated_by,
+                                     "updated_at": stored.updated_at})
+                elif key.startswith("claim:"):
+                    claims.append((key, None, None))
+                elif key.startswith(f"{self._QUEUE_PREFIX}{agent.id}:"):
+                    stored = self.db.store_get(channel, key)
+                    if stored is not None and isinstance(stored.value, dict) \
+                            and not stored.value.get("decided"):
+                        queue.append({"channel": channel, "key": key,
+                                      **stored.value,
+                                      "updated_by": stored.updated_by})
+            for key, _, _ in claims:
+                stored = self.db.store_get(channel, key)
+                if stored is None:
+                    continue
+                v = stored.value if isinstance(stored.value, dict) else {}
+                slug = key[len("claim:"):]
+                item = {"channel": channel, "task": slug,
+                        "owner": v.get("owner", stored.updated_by),
+                        "updated_by": stored.updated_by,
+                        "updated_at": stored.updated_at}
+                if not v.get("done"):
+                    in_progress.append(item)
+                elif v.get("review", "none") in ("operator", "delegate") \
+                        and slug not in decision_slugs:
+                    pending_review.append({**item, "review": v["review"]})
+        pending_on_me.sort(key=lambda r: (not r["escalated"], r["since"]))
+        proposals.sort(key=lambda r: r["since"])
+        done.sort(key=lambda d: d["updated_at"], reverse=True)
+        return {
+            "viewer": agent.id,
+            "pending_on_me": pending_on_me,
+            "queue": queue,
+            "proposals": proposals,
+            "in_progress": in_progress,
+            "pending_review": pending_review,
+            "done": done[:20],
+            "counts": {"pending_on_me": len(pending_on_me), "queue": len(queue),
+                       "proposals": len(proposals),
+                       "in_progress": len(in_progress),
+                       "pending_review": len(pending_review),
+                       "done_shown": min(len(done), 20), "done_total": len(done)},
+        }
+
+    # -- operator pause / stand-down (0069) ----------------------------------------
+
+    def hub_paused(self) -> dict[str, Any] | None:
+        """The ongoing pause (since/reason/by) or None. Tiny TTL cache: this
+        is consulted on every mutating call and per-envelope for the clock
+        exclusion; pause transitions are rare."""
+        now = time.time()
+        if now - self._pause_cache_at > 1.0:
+            self._pause_cache = self.db.pause_get()
+            self._pause_cache_at = now
+        return self._pause_cache
+
+    def _bust_pause_cache(self) -> None:
+        self._pause_cache_at = 0.0
+        self._intervals_cache_at = 0.0
+
+    def _require_unpaused(self, agent: AgentInfo, channel: str | None = None) -> None:
+        """The stand-down gate: while paused, non-operators cannot mutate the
+        SHARED world (posts, DMs between agents, store/fs writes, joins).
+        Reads, acks, receipts and presence stay open — the operator pauses to
+        catch up, and agents may catch up too. Operator exceptions: their own
+        posts (incl. criticals) and any DM that involves an operator — "catch
+        up including with the delegate" requires the delegate to answer."""
+        pause = self.hub_paused()
+        if pause is None or agent.operator:
+            return
+        if channel is not None and channel.startswith(DM_PREFIX):
+            ids = channel[len(DM_PREFIX):].split("--")
+            if any(i in self.operator_ids() for i in ids):
+                return
+        since = time.strftime("%Y-%m-%d %H:%M %Z", time.localtime(pause["since"]))
+        reason = f" (reason: {pause['reason']})" if pause["reason"] else ""
+        raise HubError(423, f"hub paused by the operator since {since}{reason} "
+                            "— stand down: finish nothing new, do not retry "
+                            "in a loop; reads, acks and DMs with the operator "
+                            "stay open; whoami.hub_state shows the resume. "
+                            "Nothing was posted or written.")
+
+    def set_pause(self, reason: str = "", by: str = "operator") -> dict[str, Any]:
+        """Pause the hub (admin surface; idempotent). Broadcasts one system
+        message per non-DM channel — one wake to say 'stand down' beats idle
+        seats discovering 423s piecemeal without context."""
+        state, created = self.db.pause_start(sanitize_text(reason, 200), by)
+        self._bust_pause_cache()
+        if created:
+            self._broadcast_system(
+                f"HUB PAUSED by the operator{' — ' + state['reason'] if state['reason'] else ''}. "
+                "Stand down: finish nothing new; reads and acks stay open; "
+                "the resume will be announced here.",
+                data={"hub_state": "paused"})
+        return {"state": "paused", **state}
+
+    def clear_pause(self, by: str = "operator") -> dict[str, Any]:
+        """Resume (idempotent). Escalation clocks were frozen for the whole
+        pause, so nothing bursts on resume."""
+        ended = self.db.pause_end()
+        self._bust_pause_cache()
+        if ended:
+            self._broadcast_system(
+                "HUB RESUMED by the operator — normal collaboration resumes. "
+                "Obligation clocks were frozen for the duration.",
+                data={"hub_state": "open"})
+        return {"state": "open"}
+
+    def _broadcast_system(self, body: str, data: dict[str, Any] | None = None) -> None:
+        for name in self.db.channel_names():
+            if not name.startswith(DM_PREFIX):
+                message = self.db.insert_message(
+                    name, "hub", kind=Kind.system.value, status="fyi",
+                    urgency="inbox", title="", body=body, data=data, reply_to=None)
+                self._wake(message)
+
+    def _pause_intervals_cached(self) -> list[tuple[float, float | None]]:
+        """All pause intervals, TTL-cached: consulted per envelope, so a
+        100-message inbox sweep must not mean 100 locked queries (review
+        MED-3). Intervals change only on pause/resume, which busts this."""
+        now = time.time()
+        if now - self._intervals_cache_at > 1.0:
+            self._intervals_cache = self.db.pause_intervals(0.0)
+            self._intervals_cache_at = now
+        return self._intervals_cache
+
+    def paused_seconds_since(self, since_ts: float) -> float:
+        """Total paused time overlapping [since_ts, now] — the escalation
+        clock exclusion (a pause never ages an obligation toward its SLA)."""
+        now = time.time()
+        total = 0.0
+        for started, ended in self._pause_intervals_cached():
+            lo = max(started, since_ts)
+            hi = min(ended if ended is not None else now, now)
+            if hi > lo:
+                total += hi - lo
+        return total
+
     # -- hub rules (operator-authored general instructions) -----------------------
 
     def hub_rules(self) -> dict[str, Any]:
@@ -1056,6 +1747,112 @@ class HubService:
             raise HubError(413, f"hub rules exceed {MAX_STORE_VALUE_BYTES} bytes")
         row = self.db.hub_rules_set(text)
         return {"version": row["version"], "text": row["text"]}
+
+    # -- dark-episode operator alerts (0067) --------------------------------------
+
+    DARK_ALERTS_CHANNEL = "hub-alerts"
+
+    def _ensure_alerts_channel(self) -> None:
+        """Lazy, idempotent: a PRIVATE, ownerless channel where the hub posts
+        operator alerts as ordinary system messages — delivery (notify files,
+        live push, listener wakes) rides the normal membership fan-out, so no
+        new delivery machinery exists. Private + operator-membership because
+        alerts name who is behind on what (review HIGH-2); ownerless + a
+        reserved name (create_channel refuses it) because a squatter owning
+        the room would read and control operator alerts (review HIGH-1).
+        Operators are (re)added on every sweep so late-registered operators
+        still receive alerts."""
+        if self.db.get_channel(self.DARK_ALERTS_CHANNEL) is None:
+            self.db.create_channel(self.DARK_ALERTS_CHANNEL, private=True,
+                                   created_by="hub", add_owner=False)
+        for op in self.operator_ids():
+            self.db.add_member(self.DARK_ALERTS_CHANNEL, op, role="member")
+
+    def dark_sweep(self) -> list[str]:
+        """One watchdog pass (0067): alert the operator ONCE per (agent,
+        dark-episode) when a seat is offline while holding an obligation that
+        has already escalated past its channel SLA — the state where hub-side
+        escalation provably spins in place (the addressee cannot see it) and
+        only the operator can start the seat. Episode state is in-memory: a
+        hub restart re-alerts once, which is honest. Returns newly-alerted ids."""
+        alerted: list[str] = []
+        dark_now: set[str] = set()
+        if self.db.get_channel(self.DARK_ALERTS_CHANNEL) is not None:
+            self._ensure_alerts_channel()  # keep late-registered operators subscribed
+        # Forgotten-pause reminder (0069): a pause has no TTL by design, so
+        # the watchdog nudges the operator once per 24h while it stands.
+        pause = self.hub_paused()
+        if (pause is not None and time.time() - pause["since"] > 86400.0
+                and time.time() - self._pause_reminded_at > 86400.0):
+            self._pause_reminded_at = time.time()
+            self._ensure_alerts_channel()
+            self._post_system(
+                self.DARK_ALERTS_CHANNEL,
+                f"HUB STILL PAUSED (since {time.strftime('%Y-%m-%d %H:%M', time.localtime(pause['since']))}"
+                f"{', reason: ' + pause['reason'] if pause['reason'] else ''}) — "
+                f"resume with `agora resume` when ready; this reminder repeats daily.")
+        hub_blocked = {b["agent_id"] for b in self.db.blocks_active(self.HUB_SCOPE)}
+        for agent_id in self.db.list_agent_ids():
+            if self.presence.get(agent_id).state != "offline":
+                continue
+            # A hub-blocked seat is offline BY DESIGN — the operator locked it
+            # out. Alerting "only the operator can start it" is a standing
+            # misdiagnosis (review F5), and its obligations now revert to
+            # broadcast (F3), so skip it.
+            if agent_id in hub_blocked:
+                continue
+            envelopes = self.inbox(AgentInfo(id=agent_id, name=agent_id))
+            overdue = [e for e in envelopes if e.escalated
+                       and e.status in (Status.open, Status.blocked)]
+            if not overdue:
+                continue
+            dark_now.add(agent_id)
+            if agent_id in self._dark_since:
+                continue  # already alerted this episode
+            now = time.time()
+            self._dark_since[agent_id] = now
+            # Flap guard (review MED-4): an agent oscillating between active
+            # and offline (one REST call per hour) must not re-alert on every
+            # oscillation while the same overdue work stands.
+            if now - self._dark_alerted_at.get(agent_id, 0.0) < DARK_REALERT_SECONDS:
+                continue
+            self._dark_alerted_at[agent_id] = now
+            oldest = min(e.created_at for e in overdue)
+            age_min = (now - oldest) / 60
+            # Never leak private/DM channel names into the alert (HIGH-2 —
+            # the alerts channel is operator-private, but redact anyway:
+            # alert texts get quoted and forwarded).
+            example = "a private thread"
+            ch = self.db.get_channel(overdue[0].channel)
+            if ch is not None and not ch.private:
+                example = f"{overdue[0].channel}#{overdue[0].seq}"
+            self._ensure_alerts_channel()
+            self._post_system(
+                self.DARK_ALERTS_CHANNEL,
+                f"AGENT DARK: {agent_id} is offline holding {len(overdue)} "
+                f"SLA-breached obligation(s), oldest ~{age_min:.0f} min "
+                f"(e.g. {example}). Escalation cannot reach an offline seat "
+                f"— only the operator can start it. One alert per dark "
+                f"episode.")
+            alerted.append(agent_id)
+        # Episodes end when the seat returns or its overdue work clears.
+        for agent_id in list(self._dark_since):
+            if agent_id not in dark_now:
+                del self._dark_since[agent_id]
+        return alerted
+
+    async def dark_watchdog(self, interval_seconds: float = 300.0) -> None:
+        """Background loop for dark_sweep (started by the app lifespan;
+        interval 0 disables). Failures are logged and swallowed: a watchdog
+        must never take the hub down, but must never fail silently either."""
+        import logging
+        log = logging.getLogger("agora.hub.watchdog")
+        while True:
+            await asyncio.sleep(interval_seconds)
+            try:
+                await asyncio.to_thread(self.dark_sweep)
+            except Exception:
+                log.exception("dark sweep failed (will retry next interval)")
 
     def agent_status_overview(self) -> list[dict[str, Any]]:
         """Operator overview: per agent, presence + unread count + the oldest

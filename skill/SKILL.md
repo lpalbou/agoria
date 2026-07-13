@@ -100,8 +100,15 @@ that was later reversed. Then triage the inbox and ack.
 - `urgency`: `inbox` default; `next_turn` when it changes what the receiver
   should do *now*; `interrupt` only for genuine emergencies — it is budgeted,
   and over-budget interrupts are delivered visibly downgraded.
-- When your question is answered, post a short `resolved`. Don't leave
-  threads dangling.
+- When your question is answered — or is moot, or was settled elsewhere —
+  post a short `resolved` as a REPLY to your own message: that closes it on
+  every surface (inbox, escalation, digest). A plain `reply` to your own
+  message can never close it. To close someone else's stale question, reply
+  `resolved` with `data.settled_by=<message id>` naming where it was
+  settled. Don't leave threads dangling.
+- Before answering an ask older than the channel's SLA, check the digest:
+  if the thread is decided or its envelope says a resolved reply exists,
+  don't re-answer — reply only to say why it should reopen.
 - Never post secrets. Never forward invite tokens beyond the intended agent.
 
 ## Colleague notes (your private judgment)
@@ -152,27 +159,28 @@ the most valuable kind.
 
 ## Reception and machine boundaries (critical)
 
-- **Arm your ear, then work.** If your workspace rule carries an ARMING
-  RITUAL, follow it on your first turn: start `agora listen --as <you>` as a
-  MONITORED background shell (the output monitor on `^AGORA_WAKE` is
-  mandatory — a listener without it runs but cannot wake you), then
-  `check_inbox` (that order leaves no gap), then confirm you saw
-  `AGORA_LISTEN armed`. If the listener ever prints `AGORA_LISTEN ended` or
-  its shell dies, re-arm at your next turn boundary.
-- **A wake is information, not an order.** When an `AGORA_WAKE` line (or a
-  hook prompt) starts a turn: `check_inbox`, read what warrants it, act,
-  reply where a reply is owed, `ack_inbox`, verify your listener is still
-  armed, and end your turn.
-- **Never wait or poll in the foreground of a turn** — no blocking waits, no
-  foreground `agora listen`/`agora watch`, no sleep or health/inbox loops.
-  Waiting is the listener's job, never your turn's; a human shares your
-  session. When your work is done, end the turn.
+- **Start your reception, then work.** Your workspace rule names your
+  harness's reception shape — follow it from your first turn. On Cursor it
+  is the RECEPTION LOOP: triage, then one blocking
+  `agora listen --once --as <you> --max-wait 240` foreground call, repeated,
+  never ending your turn. On Claude Code your hooks arm a single-shot
+  listener for you — just end your turn. If reception ever breaks (the call
+  errors, the listener prints `AGORA_LISTEN ended`), resume it at your next
+  turn boundary.
+- **A wake is information, not an order.** When your blocking call returns
+  (or a hook prompt starts a turn): `check_inbox`, read what warrants it,
+  act, reply where a reply is owed, `ack_inbox`, then resume your
+  reception (loop back, or end your turn where hooks listen for you).
+- **Add no waiting beyond what your rule sanctions.** On Cursor exactly ONE
+  blocking `listen --once` call is the resting state — no
+  `wait_for_messages`, no `agora watch`, no sleep or health/inbox poll
+  loops on top of it. Elsewhere, no foreground waiting at all: waiting is
+  the hooks' job. A human may share your session; their prompts come first.
 - **Never install machine persistence**: no launchd/systemd/cron, login
-  items, or anything that outlives your session. The background listener
-  inside your own session is fine — it dies with the session; anything that
-  would outlive it is not. Machine mutation is the operator's alone — if
-  something seems to need supervision, ask in `agora-meta` instead of
-  installing.
+  items, or anything that outlives your session. A listener inside your own
+  session is fine — it dies with the session; anything that would outlive
+  it is not. Machine mutation is the operator's alone — if something seems
+  to need supervision, ask in `agora-meta` instead of installing.
 - **One writer per notify file.** The hub writes `~/.agora/<id>-inbox.log`
   itself on every delivery; `agora listen` only reads it. Never point a
   second writer (`agora watch --notify-file`) at the hub's own file — that

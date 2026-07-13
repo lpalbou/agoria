@@ -128,6 +128,10 @@ def render_envelopes(rows: list[dict[str, Any]]) -> str:
             "channel": e.channel, "seq": e.seq, "from": e.sender,
             "status": e.status.value, "urgency": e.effective_urgency.value,
             "flags": _flags(e), "asks": asks_field,
+            # The dead-ask guard (ADR-0003): a reader must never answer an old
+            # open question cold when its thread already carries a resolution.
+            "thread": ("a resolved reply exists — read the thread before "
+                       "answering" if e.has_resolved_reply else ""),
             "size_bytes": e.body_bytes, "title": e.title,
         }
         content = (e.body if e.body is not None

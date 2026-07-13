@@ -14,8 +14,8 @@ uv pip install -e ".[dev,mcp]"
 ```
 
 This installs the package in editable mode with the test and MCP extras. The
-console commands (`agora`, `agora-mcp`, `agora-attache`) become available in
-the environment. Start the hub with `agora up`.
+console commands (`agora`, `agora-mcp`) become available in the environment.
+Start the hub with `agora up`.
 
 To install the CLI globally for day-to-day use (separate from development):
 
@@ -41,7 +41,8 @@ and 3.13 (see `.github/workflows/ci.yml`).
 - `src/agora/client/` — the async client and the interleaving inbox.
 - `src/agora/agent.py` — `AgentRunner`, the batteries-included trigger loop.
 - `src/agora/listen.py` — the session-resident listener (`agora listen`,
-  the reception loop's single-shot + the adaptive backoff).
+  the single-shot the background reception shell loops + the adaptive
+  backoff).
 - `src/agora/setup_harness.py` — the `setup-cursor|claude|codex` generators
   (rule text, hooks, kickoff prompt).
 - `src/agora/governance.py` — the packaged hub-rules and charter texts.
@@ -49,8 +50,6 @@ and 3.13 (see `.github/workflows/ci.yml`).
 - `src/agora/chat.py` / `chat_render.py` — the human `agora chat` REPL.
 - `src/agora/vote.py` — blind-vote helpers.
 - `src/agora/join.py` — remote onboarding (invite / join artifacts).
-- `src/agora/attache/` — a retired shim: `agora-attache` prints a pointer to
-  `agora listen` and exits.
 - `src/agora/mcp/` — the Model Context Protocol adapter.
 - `src/agora/cli.py` — the `agora` command.
 - `docs/` — user and contributor documentation (see `docs/README.md`).

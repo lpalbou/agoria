@@ -134,7 +134,8 @@ def _print_key_placement(written_config: Path) -> None:
     print("  keep that file out of version control (gitignore it).")
 
 
-def _print_kickoff(agent_id: str, url: str, *, standing_loop: bool) -> None:
+def _print_kickoff(agent_id: str, url: str, *, standing_loop: bool,
+                   harness: str = "cursor") -> None:
     """A rule only reaches a harness session's context INSIDE a turn, so a
     just-launched idle session never arms itself — it needs one kick-off turn.
     Print the paste-ready first-turn prompt so the operator can start the agent
@@ -142,7 +143,8 @@ def _print_kickoff(agent_id: str, url: str, *, standing_loop: bool) -> None:
     event wake; the arm-then-end variant otherwise)."""
     from .setup_harness import kickoff_prompt
     print("\nTo start this agent, paste this as its FIRST message:\n")
-    print(kickoff_prompt(agent_id, url, standing_loop=standing_loop))
+    print(kickoff_prompt(agent_id, url, standing_loop=standing_loop,
+                         harness=harness))
 
 
 def cmd_setup_cursor(args: argparse.Namespace) -> None:
@@ -171,7 +173,7 @@ def cmd_setup_cursor(args: argparse.Namespace) -> None:
     else:
         print("Open this folder in Cursor. The agent self-registers on first tool use.")
     _warn_if_not_project_root(workspace, args.agent)
-    _print_kickoff(args.agent, url, standing_loop=False)
+    _print_kickoff(args.agent, url, standing_loop=False, harness="cursor")
 
 
 def cmd_setup_claude(args: argparse.Namespace) -> None:
@@ -206,7 +208,7 @@ def cmd_setup_claude(args: argparse.Namespace) -> None:
         print("Run `claude` in this folder and approve the 'agora' MCP "
               "server (/mcp).")
     _warn_if_not_project_root(workspace, args.agent)
-    _print_kickoff(args.agent, url, standing_loop=False)
+    _print_kickoff(args.agent, url, standing_loop=False, harness="claude")
 
 
 def cmd_setup_codex(args: argparse.Namespace) -> None:
@@ -248,8 +250,9 @@ def cmd_setup_codex(args: argparse.Namespace) -> None:
     if args.with_hook:
         print("Then review/approve the Stop hook once via /hooks (re-approve "
               "if the hook file ever changes).")
-    # The attaché is retired (its default commands were session resumes, which
-    # the protocol forbids); Codex has no idle-wake surface, so be honest here.
+    # Codex has no idle-wake surface, so be honest here instead of promising
+    # push (session resumes are forbidden by the "hub never creates turns"
+    # boundary).
     print("Note: Codex has no idle-wake surface; the Stop hook drains bursts at "
           "turn ends, otherwise messages wait for the next turn (that is "
           "expected). Harnesses with a wake surface use `agora listen`.")
@@ -844,7 +847,8 @@ def cmd_join(args):
         if args.harness and args.harness != "none" and agent_id:
             # Codex has no event wake → standing loop; others arm-then-end.
             _print_kickoff(agent_id, url,
-                           standing_loop=(args.harness == "codex"))
+                           standing_loop=(args.harness == "codex"),
+                           harness=args.harness)
         return
 
     if not args.channel:

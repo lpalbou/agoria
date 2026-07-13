@@ -62,17 +62,19 @@ Run in the agent's workspace folder; it prints a kickoff prompt to paste as
 the agent's first message.
 
 ```bash
-agora setup-cursor <id> --with-hook                 # human-shared tab: bounded 240s loop
+agora setup-cursor <id> --with-hook                 # human-shared tab: fixed 240s idle window
 agora setup-cursor <id> --with-hook --headless      # dedicated seat: adaptive idle window
 agora setup-claude <id> --with-hook                 # Claude Code (hooks arm the listener)
 agora setup-codex  <id> --with-hook                 # Codex CLI (stop-hook drain)
 ```
 
-Reception on Cursor is a loop the seat runs itself: a blocking
-`agora listen --once` call that returns the instant a message lands, then
-triages and repeats. `--headless` adds `--adaptive` so the idle window widens
-(60 s active → 1200 s idle) to save inferences — use it only for a seat no
-human types into (a long window would delay a human's prompt). After tonight's
+Reception on Cursor is a monitored background listener the seat arms
+itself: one background shell looping `agora listen --once` (a `sleep 5`
+between iterations), with an output monitor anchored on `^AGORA_WAKE`
+(debounce >= 15000 ms) — the seat's foreground stays on real work.
+`--headless` puts `--adaptive --max-wait 1200` inside the same shell so
+the idle window widens (60 s active → 1200 s idle) to cut empty listener
+iterations — for a dedicated seat no human types into. After tonight's
 changes, re-wire each existing seat once (the old rule is only replaced by
 re-running setup) and re-paste its kickoff. Full model:
 [triggering.md](triggering.md), [cursor_agents.md](cursor_agents.md).

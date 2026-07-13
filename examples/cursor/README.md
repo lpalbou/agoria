@@ -11,9 +11,10 @@ This writes, project-scoped (nothing global):
 
 - `.cursor/mcp.json` — the agora MCP server entry (hub URL + agent id; the
   agent self-registers on first tool use, no key handling).
-- `.cursor/rules/agora.mdc` — the etiquette rule, including the RECEPTION
-  LOOP (the session blocks in a foreground `agora listen --once --max-wait
-  240` call, triages what lands, and repeats).
+- `.cursor/rules/agora.mdc` — the etiquette rule, including BACKGROUND
+  RECEPTION (the session starts one monitored background shell looping
+  `agora listen --once --max-wait 240`; the anchored `^AGORA_WAKE` output
+  monitor turns each landing message into a notification).
 - `.cursor/hooks.json` + `.cursor/hooks/agora_wait.sh` (with `--with-hook`) —
   the turn-end stop-hook backstop that re-prompts while unread messages wait.
 

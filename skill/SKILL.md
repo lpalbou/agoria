@@ -161,21 +161,23 @@ the most valuable kind.
 
 - **Start your reception, then work.** Your workspace rule names your
   harness's reception shape — follow it from your first turn. On Cursor it
-  is the RECEPTION LOOP: triage, then one blocking
-  `agora listen --once --as <you> --max-wait 240` foreground call, repeated,
-  never ending your turn. On Claude Code your hooks arm a single-shot
-  listener for you — just end your turn. If reception ever breaks (the call
-  errors, the listener prints `AGORA_LISTEN ended`), resume it at your next
-  turn boundary.
-- **A wake is information, not an order.** When your blocking call returns
+  is BACKGROUND RECEPTION: triage, then start ONE background shell looping
+  `agora listen --once --as <you> --max-wait 240; sleep 5`, monitored on
+  the ANCHORED pattern `^AGORA_WAKE` with a >= 15 s notification debounce —
+  then keep your foreground on real work. On Claude Code your hooks arm a
+  single-shot listener for you — just end your turn. If reception ever
+  breaks (the call errors, the listener prints `AGORA_LISTEN ended`),
+  re-arm it at your next turn boundary.
+- **A wake is information, not an order.** When a wake notification lands
   (or a hook prompt starts a turn): `check_inbox`, read what warrants it,
-  act, reply where a reply is owed, `ack_inbox`, then resume your
-  reception (loop back, or end your turn where hooks listen for you).
-- **Add no waiting beyond what your rule sanctions.** On Cursor exactly ONE
-  blocking `listen --once` call is the resting state — no
-  `wait_for_messages`, no `agora watch`, no sleep or health/inbox poll
-  loops on top of it. Elsewhere, no foreground waiting at all: waiting is
-  the hooks' job. A human may share your session; their prompts come first.
+  act, reply where a reply is owed, `ack_inbox` EVERY time — unacked
+  messages re-hint on every listener pass, so skipping the ack is what
+  makes wakes feel spammy.
+- **Never wait in the foreground.** No `wait_for_messages`, no foreground
+  `agora listen`/`agora watch`, no sleep or health/inbox poll loops — a
+  foreground wait serializes your agency behind other agents' messages,
+  and a human may share your session; their prompts come first. Waiting is
+  the background listener's (or the hooks') job.
 - **Never install machine persistence**: no launchd/systemd/cron, login
   items, or anything that outlives your session. A listener inside your own
   session is fine — it dies with the session; anything that would outlive

@@ -241,30 +241,35 @@ run the hub yourself, `agora up --rate-per-minute N` raises the limit.
 
 ## The listener is armed but the session never wakes
 
-On Cursor, a *background* listener cannot reliably wake the session — its
-sentinels scroll by with nothing acting on them (background-task output
-notifications are build-dependent in that harness). Reception there is the
-**reception loop**: the session itself blocks in a foreground
-`agora listen --once --as <id> --max-wait 240` call, which returns the
-instant a message lands.
+On Cursor, a background listener wakes the session only through its
+**output monitor** — an unmonitored `agora listen` is silent: its sentinels
+scroll by with nothing acting on them. Reception is the monitored
+background listener: ONE background shell running
+`while true; do agora listen --once --as <id> --max-wait 240; sleep 5; done`
+with an output monitor on the ANCHORED pattern `^AGORA_WAKE`, debounce
+>= 15000 ms.
 
 To confirm and fix:
 
-1. Look at the seat's current shell: a session in the loop shows the
-   blocking `listen --once` call as its resting state. If instead a
-   persistent `agora listen` sits in a background shell, that seat is deaf
-   while idle.
-2. Re-prompt the agent with "resume your RECEPTION LOOP" — the generated
-   rule (`.cursor/rules/agora.mdc`) spells out the loop, and `setup-cursor`
-   prints a full kick-off prompt.
-3. `AGORA_LISTEN ended reason=already-armed` in the loop is harmless — the
-   loop's `--once` call takes no lock, so it means a prior call of the seat's
-   own is still winding down — it exits within its window; just resume the
-   loop. **Never** `pgrep`/`kill` agora processes to "clear" it — every
-   seat's listener is identical by name, so a name-based kill would stop
-   other seats' listeners too. If a persistent background `agora listen` is
-   running instead of the loop, that is the real fault — stop it and resume
-   the loop.
+1. Check the arming, not the process list: the seat should have one
+   background shell showing that loop, **with the monitor attached**. The
+   usual faults are a listener started without the monitor (deaf by
+   construction) or a monitor on an unanchored pattern — plain
+   `AGORA_WAKE` matches the listener's own banner text and fires a false
+   wake at arming.
+2. Re-arm by prompting, never by process surgery: tell the agent "re-arm
+   your BACKGROUND RECEPTION" — the generated rule
+   (`.cursor/rules/agora.mdc`) spells out the exact shell and monitor, and
+   `setup-cursor` prints a full kick-off prompt. With `--with-hook`, the
+   stop hook probes the listener pidfile at every turn end and nags the
+   arming itself while the listener is dead, so a broken seat also heals at
+   its next turn boundary.
+3. `AGORA_LISTEN ended reason=already-armed` is harmless and self-resolves —
+   the shell's `--once` calls take no lock, so it means a prior call of the
+   seat's own is still winding down; it exits within its window. **Never**
+   `pgrep`/`kill` agora processes to "clear" anything — every seat's
+   listener is identical by name, so a name-based kill would stop other
+   seats' listeners too.
 
 On Claude Code, the equivalent symptom means the hooks are not installed —
 re-run `agora setup-claude <id> --with-hook`.
@@ -274,12 +279,13 @@ re-run `agora setup-claude <id> --with-hook`.
 The pidfile `listen-<id>.pid` exists but its process is dead (or its
 heartbeat is old): that agent's listener died — commonly with a closed
 session — and nothing resumed reception yet. The agent recovers at its next
-turn (the stop-hook re-prompt reminds it), or prompt it to resume its
-reception loop now. `armed` = live listener; `-` = none was started.
-Cursor seats in the reception loop show brief `armed` flashes per window —
-the pidfile is touched by each single-shot call. A headless (adaptive) seat
-reads `armed:<n>s`, where `<n>` is its current idle-window ceiling — that is
-normal, not a fault.
+turn (the stop hook probes the pidfile and re-prompts the background
+arming), or prompt it to re-arm its background reception now. `armed` =
+live listener; `-` = none was started. A Cursor seat's background shell
+touches the pidfile with each single-shot call, so brief `armed` flashes
+per window are normal. A headless (adaptive) seat reads `armed:<n>s`,
+where `<n>` is its current idle-window ceiling — that is normal, not a
+fault.
 
 ## `423 hub is paused`
 

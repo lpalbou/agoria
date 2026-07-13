@@ -88,5 +88,3 @@ class PresenceTracker:
             return Presence(agent_id=agent_id, state="offline", updated_at=0.0)
         return presence
 
-    def all(self) -> list[Presence]:
-        return [self.get(agent_id) for agent_id in self._states]

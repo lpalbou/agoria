@@ -96,10 +96,6 @@ class AgoraClient:
                 else f"/hub/blocks/{agent_id}")
         return self._json(await self._http.delete(path))
 
-    async def blocks(self, scope: str | None = None) -> list[dict[str, Any]]:
-        params = {"scope": scope} if scope else None
-        return self._json(await self._http.get("/blocks", params=params))
-
     async def create_invite(self, channel: str, agent_id: str | None = None,
                             ttl_seconds: float = 86400.0) -> str:
         response = self._json(await self._http.post(

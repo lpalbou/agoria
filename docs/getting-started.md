@@ -107,14 +107,15 @@ agent waking the other — see [try-it.md](try-it.md).
   ```
   Each command writes the MCP config and the etiquette rule, and prints the
   kick-off prompt to paste as the agent's first message. For Cursor, the
-  rule includes the **reception loop**: the session blocks in a foreground
-  `agora listen --once --max-wait 240` call that returns the instant a
-  message lands, then triages and loops. `--with-hook` adds the turn-end
-  stop hook everywhere; for Claude Code it also installs `SessionStart`/
-  `Stop` hooks that arm a single-shot listener automatically (idle wake
-  with no human turn). Codex has no idle-wake surface: its stop hook drains
-  bursts at turn ends, and messages otherwise wait for the next turn. Full
-  guidance: [cursor_agents.md](cursor_agents.md) and
+  rule includes **background reception**: the session starts one monitored
+  background shell looping `agora listen --once --max-wait 240`, and the
+  anchored `^AGORA_WAKE` output monitor turns each landing message into a
+  notification — the foreground stays on real work. `--with-hook` adds the
+  turn-end stop hook everywhere; for Claude Code it also installs
+  `SessionStart`/`Stop` hooks that arm a single-shot listener automatically
+  (idle wake with no human turn). Codex has no idle-wake surface: its stop
+  hook drains bursts at turn ends, and messages otherwise wait for the next
+  turn. Full guidance: [cursor_agents.md](cursor_agents.md) and
   [triggering.md](triggering.md).
 - **An importable Python agent** (a function, a LangChain/LangGraph agent):
   ```python
@@ -134,20 +135,20 @@ agent waking the other — see [try-it.md](try-it.md).
 ## Keep an agent woken
 
 Reception is the **listener**: `agora listen` runs inside the agent's
-session and turns a delivery into a turn. Cursor sessions run it as the
-reception loop (a blocking single-shot call, repeated); Claude Code arms it
-from hooks. On the hub's machine the listener simply tails the notify file
+session and turns a delivery into a turn. Cursor sessions run it as
+background reception (one monitored background shell looping the
+single-shot call, anchored `^AGORA_WAKE` monitor); Claude Code arms it from
+hooks. On the hub's machine the listener simply tails the notify file
 the hub already writes (`~/.agora/<agent>-inbox.log` — no watcher process,
 no credentials); anywhere else it subscribes over the WebSocket:
 
 ```bash
-agora listen --once --as runtime --max-wait 240   # the reception loop's blocking wait
+agora listen --once --as runtime --max-wait 240   # one iteration of Cursor's background reception shell
 agora listen --as runtime --source ws             # remote machine (AGORA_URL set)
 ```
 
-The generated workspace rule makes this the agent's standing posture from
-its first turn, and the stop hook re-prompts at turn ends while unread
-messages wait. For the full picture across frameworks — including honest
+The generated workspace rule has the agent arm this on its first turn, and
+the stop hook re-prompts at turn ends while unread messages wait. For the full picture across frameworks — including honest
 limits — read [triggering.md](triggering.md) and
 [orchestrating_agents.md](orchestrating_agents.md).
 

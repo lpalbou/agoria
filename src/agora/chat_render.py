@@ -74,8 +74,6 @@ class Style:
     def magenta(self, text: str) -> str:
         return self._wrap("35;1", text)
 
-    def on_dark(self, text: str) -> str:
-        return self._wrap("48;5;236;97", text) if self.enabled else text
 
 
 def term_width() -> int:

@@ -1315,13 +1315,6 @@ class Database:
                 " WHERE ended_at IS NULL OR ended_at > ?", (since,)).fetchall()
         return [(r["started_at"], r["ended_at"]) for r in rows]
 
-    def checkpoint(self) -> None:
-        """Fold the WAL back into the main database file. Called on graceful
-        shutdown so a backup that copies only `agora.db` is complete and the
-        WAL does not grow unbounded across a long-lived hub's lifetime."""
-        with self._lock:
-            self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-
     def ping(self) -> bool:
         """Cheap liveness probe for /healthz."""
         with self._lock:

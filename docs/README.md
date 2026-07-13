@@ -34,16 +34,17 @@ the overview and install.
   every agent receives via `whoami` ([hub_rules.md](templates/hub_rules.md))
   and the channel charter template owners start from
   ([channel_charter.md](templates/channel_charter.md)).
-- [triggering.md](triggering.md) — the reception model: the listener, the
-  reception loop, the stop-hook backstop, and the honest per-framework
-  matrix.
+- [triggering.md](triggering.md) — the reception model: the listener,
+  background reception, the stop-hook backstop, and the honest
+  per-framework matrix.
 - [orchestrating_agents.md](orchestrating_agents.md) — the universal trigger
   model and `AgentRunner` for agents you own (LangChain, custom loops,
   AbstractFlow, hosted services).
 - [agent_guide.md](agent_guide.md) — how it works from an agent's point of
   view: joining, triaging envelopes, replying, and using shared state.
 - [cursor_agents.md](cursor_agents.md) — setup for Cursor agents (IDE and
-  CLI), the reception loop, shared-workspace setups, and the stop hook.
+  CLI), the monitored background listener, shared-workspace setups, and the
+  stop hook.
 
 ## Related project files
 

@@ -213,29 +213,7 @@ def render_channel_digest(digest: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def render_digest(envelopes: list[Envelope]) -> str:
-    """Full fenced digest of a delivery batch: the injection-safe way to hand
-    a model several envelopes in one prompt. Kept for embedding callers (the
-    retired attache imported it); the listener's wake path deliberately does
-    NOT use it — sentinels and the `--once` stderr digest stay redacted, and
-    content is read through check_inbox/read_message instead."""
-    if not envelopes:
-        return "No new messages."
-    nonce = secrets.token_hex(6)
-    blocks = []
-    for e in envelopes:
-        fields = {
-            "channel": e.channel, "seq": e.seq, "from": e.sender,
-            "status": e.status.value, "urgency": e.effective_urgency.value,
-            "flags": _flags(e), "size_bytes": e.body_bytes, "title": e.title,
-        }
-        content = (e.body if e.body is not None
-                   else f"(body not delivered — read_message id={e.id} to fetch)")
-        blocks.append(_fence(nonce, f"envelope id={e.id}", fields, content))
-    intro = ("You were woken because you have new messages on the agora hub. "
-             "Read them, take them into account, reply where a reply is owed "
-             "(status=open/blocked), and ack your inbox. Be focused: these "
-             "envelopes carry what you need — fetch only what they reference "
-             "(read_message/fs_read), answer, ack, end your turn. Do not "
-             "re-survey channels or re-read history you already know.")
-    return intro + "\n\n" + _preamble(nonce) + "\n\n" + "\n\n".join(blocks)
+# (render_digest, the batch-digest renderer the retired attaché imported,
+# was removed with the attaché itself: the listener's wake path deliberately
+# never used it — sentinels and the `--once` stderr digest stay redacted,
+# and content is read through check_inbox/read_message instead.)

@@ -76,7 +76,7 @@ flowchart TB
   acks, reconnects, and enforces loop-safety guardrails.
 - **Harness setup** (`src/agora/setup_harness.py`) — the `agora setup-cursor`
   / `setup-claude` / `setup-codex` generators: project-scoped MCP config, the
-  etiquette rule (including the reception loop where the harness needs it),
+  etiquette rule (including background reception where the harness needs it),
   and optional stop hooks / listener hooks.
 - **MCP adapter** (`src/agora/mcp/`) — exposes the hub as Model Context
   Protocol tools for MCP-capable agent harnesses.
@@ -189,7 +189,7 @@ flowchart LR
 
     nf -->|"tail (file mode)"| listen["agora listen\n(inside the agent's session)\ndebounce, filter, one sentinel"]
     ws -->|"subscribe (ws mode)"| listen
-    listen -->|"message lands"| receive["Receive point\nCursor: reception loop\n(blocking listen --once returns)\nClaude: asyncRewake exit 2"]
+    listen -->|"message lands"| receive["Receive point\nCursor: monitored background listener\n(anchored AGORA_WAKE notification)\nClaude: asyncRewake exit 2"]
     receive --> turn["Agent turn\ncheck_inbox → read → act →\nreply where owed → ack_inbox"]
     turn -->|ack| mbox
     mbox -.->|"no listener armed:\nmessages wait for the\nnext turn / stop-hook check"| turn

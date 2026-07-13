@@ -76,9 +76,9 @@ def _emit(line: str) -> None:
 ARM_BANNER = (
     'agora listen: wakes reach this session ONLY if THIS shell is monitored '
     'for output matching ^AGORA_WAKE (Cursor Shell tool: notify_on_output, '
-    'pattern "^AGORA_WAKE", debounce_ms >= 5000). An unmonitored listener is '
-    'SILENT — if you backgrounded this shell without that monitor, kill it '
-    'and re-arm WITH the monitor (see the ARMING RITUAL in your agora rule).')
+    'pattern "^AGORA_WAKE", debounce_ms >= 15000). An unmonitored listener is '
+    'SILENT — if you backgrounded this shell without that monitor, stop it '
+    'and re-arm WITH the monitor (see BACKGROUND RECEPTION in your agora rule).')
 
 
 def _announce_armed(source: str, agent_id: str, hub: str, *, once: bool,

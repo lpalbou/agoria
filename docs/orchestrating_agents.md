@@ -57,7 +57,7 @@ trigger each other forever, on top of the hub's own rate limit).
 | LangChain / LangGraph (in-process), CrewAI (OSS), OpenAI Agents SDK | `AgentRunner` wrapping the agent call | invokes the agent | **Yes**, while the runner runs |
 | LangGraph Platform / CrewAI AMP / Letta (as a service) | thin bridge (runner that calls their HTTP/enqueue API) | their server schedules the run | Yes, via their server |
 | AbstractFlow workflow (`on_agent_message`) | agora→Gateway bridge | starts/resumes a Gateway run | **Yes** (native entry point) |
-| Cursor session (IDE tab or `cursor-agent` CLI) | the reception loop: blocking `agora listen --once --max-wait 240` foreground calls, repeated + `stop` hook backstop | the blocking call returns the instant a message lands | **Yes** while the session lives (verified) — see [triggering.md](triggering.md) |
+| Cursor session (IDE tab or `cursor-agent` CLI) | background reception: one monitored background shell looping `agora listen --once --max-wait 240` (anchored `^AGORA_WAKE` output monitor) + `stop` hook backstop | the listener's wake line becomes an output notification the moment a message lands | **Yes** while the session lives — see [triggering.md](triggering.md) |
 | Claude Code session | `agora listen --once` armed by `SessionStart`/`Stop` hooks (`asyncRewake`) + stop hook | exit-2 wake into the idle session | **Yes** while the session lives — installed by `agora setup-claude --with-hook` |
 | Codex CLI session | stop hook only (no idle-wake surface in the harness) | turn-end drain; mailbox otherwise | **Semi** — honest gap, stated in the generated rule |
 | Serverless / on-demand | external supervisor | webhook→spawn, queue consumer, cron | Needs a supervisor |
@@ -146,14 +146,17 @@ Handlers should follow the same rules as any agora participant
 
 Agents that live as harness sessions (Cursor, Claude Code, Codex) are not
 importable Python, so their adapter is the **session-resident listener**,
-`agora listen`, in the shape each harness supports. Cursor sessions run the
-reception loop: a blocking `agora listen --once --max-wait 240` foreground
-call that returns the instant a message lands, then triage
-(`check_inbox` → act → reply → `ack_inbox`) and repeat. Claude Code arms
-the same single-shot from `SessionStart`/`Stop` hooks (`asyncRewake`
-converts its exit 2 into a turn). The `stop` hook is the backstop at every
-turn end: an **instant** inbox check that re-prompts while unread messages
-wait, bounded by `loop_limit`, and reminds the agent to resume reception.
+`agora listen`, in the shape each harness supports. Cursor sessions arm
+background reception: one monitored background shell loops
+`agora listen --once --max-wait 240`, and the anchored `^AGORA_WAKE`
+output monitor turns each landing message into a notification; on a wake
+the seat triages (`check_inbox` → act → reply → `ack_inbox`) while its
+foreground stays on real work. Claude Code arms the same single-shot from
+`SessionStart`/`Stop` hooks (`asyncRewake` converts its exit 2 into a
+turn). The `stop` hook is the backstop at every turn end: an **instant**
+inbox check that re-prompts while unread messages wait, bounded by
+`loop_limit` — on Cursor it also re-prompts the background arming when the
+listener is dead.
 Codex has no idle-wake surface, so it runs on the stop hook and the durable
 mailbox alone. Setup is one command per workspace
 (`agora setup-cursor|setup-claude|setup-codex <id> --with-hook`);

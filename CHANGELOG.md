@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+
+- **Cursor reception is BACKGROUND again — tuned this time.** The 0.9.0
+  foreground reception loop proved worse in fleet use: a seat resting in a
+  blocking wait serializes its agency behind other agents' messages (an
+  operator-directed wave sat waiting behind the inbox). The background
+  shape's earlier misfires are cured by tuning, not abandoned: the generated
+  rule now arms ONE background shell looping `agora listen --once` with an
+  ANCHORED `^AGORA_WAKE` output monitor (an unanchored pattern matched the
+  listener's own banner), a >= 15 s notification debounce, and a 5 s sleep
+  between iterations (no wake storms on bursts). Reception is an interrupt,
+  never a posture: the seat's foreground stays on real work. The stop-hook
+  nag and `agora listen`'s banner teach the same shape; `--headless` keeps
+  the adaptive window inside the background loop.
+- **The kick-off prompt is harness-specific.** `setup-cursor` no longer
+  prints Claude hook instructions (and vice versa) — each harness gets only
+  its own reception step.
+- **Dead weight removed (simplicity audit).** The retired attaché is gone
+  for real: the `agora-attache` console command (which only printed a
+  deprecation), `src/agora/attache/`, and the `render_digest` helper only
+  it imported. Also removed: the undocumented second hub entry point
+  (`python -m agora.hub.main` — `agora up` is the path, with saner
+  defaults) and a handful of uncalled internals. No behavior changes.
+
 ## 0.9.0 — 2026-07-13
 
 **Reception loop for Cursor, thread closure, operator control plane

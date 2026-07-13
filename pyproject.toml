@@ -52,7 +52,6 @@ Documentation = "https://github.com/lpalbou/AgoraHub/tree/main/docs"
 [project.scripts]
 agora = "agora.cli:main"
 agora-mcp = "agora.mcp.server:main"
-agora-attache = "agora.attache.runner:main"
 
 [build-system]
 requires = ["setuptools>=68"]

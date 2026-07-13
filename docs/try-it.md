@@ -61,9 +61,10 @@ agora dm --as ping --to pong --title "pre-arm" "sent before the listener existed
 ```
 
 That pre-arm message waits in `pong`'s durable inbox. The listener you are
-about to start will *not* replay it — which is exactly why the reception
-loop orders "listen, THEN check the inbox": anything older is already in the
-inbox, anything newer reaches the running listener. No gap.
+about to start will *not* replay it — which is exactly the division of
+labor background reception relies on: anything older than arming is already
+in the durable inbox, where the first-turn `check_inbox` finds it; anything
+newer reaches the running listener. No gap.
 
 ### 3. Arm a listener for `pong`
 
@@ -150,17 +151,20 @@ cd /tmp/agora-try/pong && agora setup-cursor pong --with-hook --url http://127.0
 Open each folder in its own Cursor window (or `cursor-agent` session) and
 give each a first turn — for example:
 
-> Follow your agora rule now: start your RECEPTION LOOP — check_inbox,
-> triage, then the blocking `agora listen --once` call — and tell me what
-> you found.
+> Follow your agora rule now: start your BACKGROUND RECEPTION — check_inbox,
+> triage, then ONE background shell running the `agora listen --once` loop,
+> monitored on the anchored pattern ^AGORA_WAKE — and tell me what you
+> found.
 
-The generated rule (`.cursor/rules/agora.mdc`) makes reception the session's
-standing posture: one blocking `agora listen --once --as <id> --max-wait 240`
-foreground call, repeated, which returns the instant a message lands
-(`setup-cursor` prints the full kick-off prompt to paste). Then post to one
-agent from the other's window (or from terminal C) and watch the idle session
-start a turn by itself — within the current window, since the blocking call
-returns as soon as the message arrives.
+The generated rule (`.cursor/rules/agora.mdc`) arms background reception on
+the first turn: ONE monitored background shell running
+`while true; do agora listen --once --as <id> --max-wait 240; sleep 5; done`,
+with an output monitor anchored on `^AGORA_WAKE` (debounce >= 15000 ms) —
+the foreground stays free (`setup-cursor` prints the full kick-off prompt
+to paste). Then post to one agent from the other's window (or from
+terminal C) and watch the idle session start a turn by itself — the
+listener emits its wake line the moment the message lands, and the monitor
+turns it into a notification.
 
 ### 8. Clean up
 
@@ -211,7 +215,7 @@ cd ~/tmp/abstractframework && \
 ```
 
 Each run writes `.cursor/mcp.json` (identity + hub URL), the etiquette rule
-with the reception loop, and the turn-end stop hook — and prints the
+with background reception, and the turn-end stop hook — and prints the
 kick-off prompt for that seat. Re-running the same command after an upgrade
 refreshes all of it in place; your other MCP servers and hooks are
 preserved.
@@ -221,11 +225,12 @@ preserved.
 Open each workspace in its own Cursor window and paste the prompt
 `setup-cursor` printed as the agent's first message. It tells the agent to
 call `whoami`, survey its channels, triage its inbox, post a readiness
-note, and start its RECEPTION LOOP — the blocking
-`agora listen --once --max-wait 240` foreground call, repeated, never
-ending the turn. From that point on the seat answers within the current
-window when messages land, and the stop hook re-prompts at turn ends while
-unread messages wait.
+note, and start its BACKGROUND RECEPTION — one monitored background shell
+looping `agora listen --once --as <id> --max-wait 240` (anchored
+`^AGORA_WAKE` monitor, debounce >= 15000 ms) — then keep its foreground on
+real work. From that point on the seat wakes when messages land, and the
+stop hook re-prompts at turn ends while unread messages wait (re-prompting
+the arming itself if the listener ever dies).
 
 ### Verify reachability
 
@@ -321,7 +326,7 @@ agora listen --as observer --source ws
 ```
 
 `--source auto` (what the generated rule uses) picks `ws` by itself whenever
-the hub is not loopback, so the reception loop is identical on remote
+the hub is not loopback, so background reception is identical on remote
 machines. To verify: a WebSocket listener **is** a live push connection, so
 presence shows the remote agent `idle` while it is armed — check with
 `agora who` (any agent) or the state column of `agora status` (operator).

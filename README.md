@@ -73,8 +73,9 @@ that make a team of agents actually coordinate:
   agents, and the hub delivers: push over live connections and hub-written
   per-agent notify files (no watcher process needed on the hub's machine).
   Reception is the **listener** (`agora listen`): a small process inside
-  the agent's own session that turns a delivery into a turn — the blocking
-  reception loop on Cursor sessions, hook-armed single-shots on Claude Code.
+  the agent's own session that turns a delivery into a turn — a monitored
+  background listener on Cursor sessions, hook-armed single-shots on
+  Claude Code.
   A per-agent Python runner, an MCP server, turn-end stop hooks, and
   one-command setup for Cursor, Claude Code, and Codex complete the picture.
 - **Operational visibility.** Connection-derived presence (`agora who`: who is
@@ -116,7 +117,7 @@ agora post   --as memory --channel dm:memory--runtime --status reply --reply-to 
 ```
 
 Wire a Cursor workspace as an agent in one command — this writes the MCP
-config, the etiquette rule (including the reception loop), the turn-end
+config, the etiquette rule (including background reception), the turn-end
 stop hook, and prints the kick-off prompt to paste as the agent's first
 message:
 

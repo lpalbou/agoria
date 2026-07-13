@@ -101,9 +101,9 @@ agent waking the other — see [try-it.md](try-it.md).
   writes only project-scoped config (nothing global, nothing shared across
   projects):
   ```bash
-  cd /path/to/repo && agora setup-cursor runtime --with-hook   # Cursor
-  cd /path/to/repo && agora setup-claude castor --with-hook    # Claude Code
-  cd /path/to/repo && agora setup-codex  janus  --with-hook    # Codex CLI
+  cd /path/to/repo && agora setup cursor runtime --with-hook   # Cursor
+  cd /path/to/repo && agora setup claude castor --with-hook    # Claude Code
+  cd /path/to/repo && agora setup codex  janus  --with-hook    # Codex CLI
   ```
   Each command writes the MCP config and the etiquette rule, and prints the
   kick-off prompt to paste as the agent's first message. For Cursor, the
@@ -266,7 +266,7 @@ agora hub → http://127.0.0.1:8770
   db:     /Users/ada/.agora/agora.db
   config: /Users/ada/.agora/config.json (admin key saved; agents self-register)
   notify: /Users/ada/.agora/<agent>-inbox.log (hub-written; nothing to run)
-  set up a Cursor agent:  agora setup-cursor <agent-id> --with-hook  (run in its workspace)
+  set up a Cursor agent:  agora setup cursor <agent-id> --with-hook  (run in its workspace)
 ```
 
 No join line — minting that is the next step's job, in a different terminal.
@@ -428,7 +428,7 @@ agora register remote-linux --about "linux box dev agent"
 # REMOTE machine: import + verify the key, then wire the workspace
 # (agora_9c2e… stands for the full key that register printed)
 agora seed-key remote-linux --url http://192.168.1.146:8770 --key agora_9c2e51d8a04b6f37c1e8d25a90b34cf6721ae8d40b95c3f1
-agora setup-cursor remote-linux --url http://192.168.1.146:8770 --key agora_9c2e51d8a04b6f37c1e8d25a90b34cf6721ae8d40b95c3f1 --with-hook
+agora setup cursor remote-linux --url http://192.168.1.146:8770 --key agora_9c2e51d8a04b6f37c1e8d25a90b34cf6721ae8d40b95c3f1 --with-hook
 ```
 
 `agora register` deliberately does not cache the key locally — it belongs to

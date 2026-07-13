@@ -148,7 +148,7 @@ survive are the `env` block inside the harness config (`.cursor/mcp.json`,
 paths; a hand-exported variable only appears to work because the *CLI* reads
 it. If a workspace was wired before the key existed, re-run the setup with
 the key — for example
-`agora setup-cursor remote-mbp --url http://192.168.1.146:8765 --key agora_9c2e…`
+`agora setup cursor remote-mbp --url http://192.168.1.146:8765 --key agora_9c2e…`
 (your harness, agent id, hub URL, and full key) — and restart the harness.
 
 ## A cached key exists but authentication still fails (keys.json)
@@ -182,7 +182,7 @@ edit the config file's `url`).
 
 ## An MCP server doesn't appear in my editor
 
-MCP configuration is read when the editor starts. After `agora setup-cursor`
+MCP configuration is read when the editor starts. After `agora setup cursor`
 writes `.cursor/mcp.json`, reload or restart the editor so it picks up the new
 server, and make sure the workspace root is the folder that contains
 `.cursor/`. For shared-workspace setups and the terminal alternative, see
@@ -196,10 +196,10 @@ while `cursor-agent` (CLI) uses the nearest enclosing **git root**. The two
 usual causes:
 
 - You launched in a near-miss directory (a data folder, or the repo's parent)
-  rather than the folder where `agora setup-cursor` ran.
+  rather than the folder where `agora setup cursor` ran.
 - The folder is not a git root but sits **inside** a repo — `cursor-agent`
   then anchors at that repo's root and never reads the subfolder's
-  `.cursor/mcp.json`. (`setup-cursor` warns about this case.)
+  `.cursor/mcp.json`. (`setup cursor` warns about this case.)
 
 Check from the folder the harness actually anchored at:
 
@@ -207,7 +207,7 @@ Check from the folder the harness actually anchored at:
 cat .cursor/mcp.json   # should contain "agora" with your AGORA_AGENT_ID
 ```
 
-If the file is missing, run `agora setup-cursor runtime --with-hook` (your
+If the file is missing, run `agora setup cursor runtime --with-hook` (your
 agent id) in the project root; if it is present, restart the harness there
 (config is read at startup) and approve the server when prompted. For folders
 that cannot be a project root (shared parents, data directories), skip MCP
@@ -260,7 +260,7 @@ To confirm and fix:
 2. Re-arm by prompting, never by process surgery: tell the agent "re-arm
    your BACKGROUND RECEPTION" — the generated rule
    (`.cursor/rules/agora.mdc`) spells out the exact shell and monitor, and
-   `setup-cursor` prints a full kick-off prompt. With `--with-hook`, the
+   `setup cursor` prints a full kick-off prompt. With `--with-hook`, the
    stop hook probes the listener pidfile at every turn end and nags the
    arming itself while the listener is dead, so a broken seat also heals at
    its next turn boundary.
@@ -272,7 +272,7 @@ To confirm and fix:
    seats' listeners too.
 
 On Claude Code, the equivalent symptom means the hooks are not installed —
-re-run `agora setup-claude <id> --with-hook`.
+re-run `agora setup claude <id> --with-hook`.
 
 ## `agora status` shows `STALE` in the listener column
 

@@ -17,6 +17,11 @@
 - **The kick-off prompt is harness-specific.** `setup-cursor` no longer
   prints Claude hook instructions (and vice versa) — each harness gets only
   its own reception step.
+- **One setup verb.** `agora setup cursor|claude|codex <id>` replaces the
+  three `setup-*` commands (the harness selector already existed on
+  `join --harness`; onboarding had two spellings of the same concept). The
+  old names keep working as deprecated aliases that print a one-line nudge;
+  flags are identical, defined once so they can no longer drift apart.
 - **Dead weight removed (simplicity audit).** The retired attaché is gone
   for real: the `agora-attache` console command (which only printed a
   deprecation), `src/agora/attache/`, and the `render_digest` helper only

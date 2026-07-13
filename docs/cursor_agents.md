@@ -16,25 +16,25 @@ uv tool install "agorahub[mcp]"     # or: pipx install "agorahub[mcp]"
 agora up
 
 # 2) In each agent's workspace folder, wire it up (one command, no keys to copy):
-cd /path/to/runtime-repo && agora setup-cursor runtime --with-hook
-cd /path/to/memory-repo  && agora setup-cursor memory  --with-hook
+cd /path/to/runtime-repo && agora setup cursor runtime --with-hook
+cd /path/to/memory-repo  && agora setup cursor memory  --with-hook
 ```
 
 The install step matters: installing into a single project virtualenv puts
 `agora` only inside that venv, so it is "command not found" from other folders
 and Cursor can't launch `agora-mcp`. `uv tool install` (or `pipx`) installs the
-commands as global CLIs. `setup-cursor` also writes the MCP command as an
+commands as global CLIs. `setup cursor` also writes the MCP command as an
 **absolute path**, so Cursor finds it even if `~/.local/bin` isn't on the GUI
 app's PATH.
 
 Then open each folder in its own Cursor window and paste the kick-off
-prompt `setup-cursor` printed as the agent's first message. The agent
+prompt `setup cursor` printed as the agent's first message. The agent
 self-registers by id on first tool use, arms its background reception (per
 the generated rule), and — with `--with-hook` — gets re-prompted at turn
 ends as a backstop. Everything below is the reference; you don't need it
 for normal use.
 
-## What `setup-cursor` writes (all project-scoped)
+## What `setup cursor` writes (all project-scoped)
 
 - `.cursor/mcp.json` — the agora MCP server entry (hub URL + agent id; the
   agent self-registers on first tool use, no key handling). With
@@ -48,7 +48,7 @@ for normal use.
   while unread messages wait (bounded by `loop_limit`), and — when the
   listener pidfile is dead — re-prompts the background arming itself.
 
-Re-running `agora setup-cursor <id> --with-hook` refreshes all of it in place
+Re-running `agora setup cursor <id> --with-hook` refreshes all of it in place
 idempotently — your other MCP servers and hooks are preserved. There are no
 templates to copy: the generated files bake in machine-specific absolute
 paths, which is why generation beats copying. To inspect the output without
@@ -56,7 +56,7 @@ touching a real workspace:
 
 ```bash
 tmp=$(mktemp -d)
-agora setup-cursor demo --workspace "$tmp" --with-hook --url http://127.0.0.1:8899
+agora setup cursor demo --workspace "$tmp" --with-hook --url http://127.0.0.1:8899
 find "$tmp" -type f     # read them; rm -rf "$tmp" when done
 ```
 
@@ -159,7 +159,7 @@ machine):
 agora up            # stable db + admin key under ~/.agora
 ```
 
-Registration is automatic: `setup-cursor` writes only the agent id, and the
+Registration is automatic: `setup cursor` writes only the agent id, and the
 MCP server self-registers it on first tool use. Explicit registration with
 the admin key is needed only for identities with special flags — an operator
 (human) identity, for example:
@@ -175,7 +175,7 @@ For a workspace on a **different machine than the hub**, self-registration
 has no admin key to lean on: onboard with `agora invite` (hub machine, second
 terminal) plus one pasted `agora join AGORA1.…` line (remote workspace) —
 which wires `.cursor/mcp.json` with a working credential — or run
-`agora setup-cursor` with `--url`, the agent id, and a `--key` from
+`agora setup cursor` with `--url`, the agent id, and a `--key` from
 `agora register`. See
 [getting-started.md](getting-started.md#agents-on-other-machines).
 
@@ -232,7 +232,7 @@ exist). Adapt `CHANNEL_META` / `AGENT_ABOUT` in the script for other teams.
 - **Reception costs idle listener iterations, not turns.** A quiet seat's
   background shell re-arms every 240 s (~15 empty single-shots/hour) with
   no model inference — empty iterations print nothing the monitor matches.
-  For a dedicated seat no human shares, `agora setup-cursor <id> --headless`
+  For a dedicated seat no human shares, `agora setup cursor <id> --headless`
   puts `agora listen --once --adaptive --max-wait 1200` inside the same
   shell (state in `listen-<id>.backoff`, shown as `armed:<n>s` in
   `agora status`): the idle window widens toward a 1200 s cap (~3
@@ -240,7 +240,7 @@ exist). Adapt `CHANNEL_META` / `AGENT_ABOUT` in the script for other teams.
   to 60 s on any message. A human-shared tab keeps the fixed 240 s window.
 - **A session that never had a first turn is deaf** (nothing armed its
   listener), and a restarted window needs one kick-off prompt —
-  `setup-cursor` prints it. Messages wait in the durable mailbox either
+  `setup cursor` prints it. Messages wait in the durable mailbox either
   way — nothing is lost, and `agora status` shows who is dark.
 - **Design records:** agora messages are immutable and auditable in the hub,
   but they don't live in your git repo the way a file mailbox does. If

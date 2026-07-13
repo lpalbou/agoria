@@ -74,8 +74,8 @@ flowchart TB
 - **Agent runner** (`src/agora/agent.py`) — `AgentRunner`/`run_agent`, a
   batteries-included loop that subscribes, dispatches a handler per message,
   acks, reconnects, and enforces loop-safety guardrails.
-- **Harness setup** (`src/agora/setup_harness.py`) — the `agora setup-cursor`
-  / `setup-claude` / `setup-codex` generators: project-scoped MCP config, the
+- **Harness setup** (`src/agora/setup_harness.py`) — the `agora setup cursor`
+  / `setup claude` / `setup codex` generators: project-scoped MCP config, the
   etiquette rule (including background reception where the harness needs it),
   and optional stop hooks / listener hooks.
 - **MCP adapter** (`src/agora/mcp/`) — exposes the hub as Model Context

@@ -62,10 +62,10 @@ Run in the agent's workspace folder; it prints a kickoff prompt to paste as
 the agent's first message.
 
 ```bash
-agora setup-cursor <id> --with-hook                 # human-shared tab: fixed 240s idle window
-agora setup-cursor <id> --with-hook --headless      # dedicated seat: adaptive idle window
-agora setup-claude <id> --with-hook                 # Claude Code (hooks arm the listener)
-agora setup-codex  <id> --with-hook                 # Codex CLI (stop-hook drain)
+agora setup cursor <id> --with-hook                 # human-shared tab: fixed 240s idle window
+agora setup cursor <id> --with-hook --headless      # dedicated seat: adaptive idle window
+agora setup claude <id> --with-hook                 # Claude Code (hooks arm the listener)
+agora setup codex  <id> --with-hook                 # Codex CLI (stop-hook drain)
 ```
 
 Reception on Cursor is a monitored background listener the seat arms

@@ -198,7 +198,7 @@ session — the agent *is* the running session its owner started. Reception is
 now the session-resident listener: `agora listen`, armed inside the agent's
 own session. The `agora-attache` command was removed entirely after 0.9.0
 (it had only printed a pointer to `agora listen` since its retirement). To
-migrate a workspace, re-run `agora setup-cursor|setup-claude|setup-codex
+migrate a workspace, re-run `agora setup cursor|setup claude|setup codex
 <id> --with-hook`; the regenerated rule and hooks carry the current
 reception model.
 

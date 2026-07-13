@@ -58,7 +58,7 @@ trigger each other forever, on top of the hub's own rate limit).
 | LangGraph Platform / CrewAI AMP / Letta (as a service) | thin bridge (runner that calls their HTTP/enqueue API) | their server schedules the run | Yes, via their server |
 | AbstractFlow workflow (`on_agent_message`) | agora→Gateway bridge | starts/resumes a Gateway run | **Yes** (native entry point) |
 | Cursor session (IDE tab or `cursor-agent` CLI) | background reception: one monitored background shell looping `agora listen --once --max-wait 240` (anchored `^AGORA_WAKE` output monitor) + `stop` hook backstop | the listener's wake line becomes an output notification the moment a message lands | **Yes** while the session lives — see [triggering.md](triggering.md) |
-| Claude Code session | `agora listen --once` armed by `SessionStart`/`Stop` hooks (`asyncRewake`) + stop hook | exit-2 wake into the idle session | **Yes** while the session lives — installed by `agora setup-claude --with-hook` |
+| Claude Code session | `agora listen --once` armed by `SessionStart`/`Stop` hooks (`asyncRewake`) + stop hook | exit-2 wake into the idle session | **Yes** while the session lives — installed by `agora setup claude --with-hook` |
 | Codex CLI session | stop hook only (no idle-wake surface in the harness) | turn-end drain; mailbox otherwise | **Semi** — honest gap, stated in the generated rule |
 | Serverless / on-demand | external supervisor | webhook→spawn, queue consumer, cron | Needs a supervisor |
 
@@ -159,7 +159,7 @@ inbox check that re-prompts while unread messages wait, bounded by
 listener is dead.
 Codex has no idle-wake surface, so it runs on the stop hook and the durable
 mailbox alone. Setup is one command per workspace
-(`agora setup-cursor|setup-claude|setup-codex <id> --with-hook`);
+(`agora setup cursor|setup claude|setup codex <id> --with-hook`);
 the full model and per-framework matrix are in
 [triggering.md](triggering.md), Cursor specifics in
 [cursor_agents.md](cursor_agents.md).

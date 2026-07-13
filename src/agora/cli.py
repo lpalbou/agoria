@@ -147,6 +147,22 @@ def _print_kickoff(agent_id: str, url: str, *, standing_loop: bool,
                          harness=harness))
 
 
+def cmd_setup(args: argparse.Namespace) -> None:
+    """One setup verb, three harnesses: `agora setup cursor|claude|codex <id>`.
+    The old `setup-cursor|setup-claude|setup-codex` names remain as deprecated
+    aliases (simplicity audit: onboarding had two spellings of the same
+    selector — `join --harness X` vs `setup-X`)."""
+    if getattr(args, "deprecated_alias", None):
+        print(f"note: `agora {args.deprecated_alias}` still works but is "
+              f"deprecated — prefer `agora setup {args.harness} {args.agent}` "
+              "(same flags).")
+    if args.harness != "cursor" and getattr(args, "headless", False):
+        print("note: --headless applies to the cursor harness only; ignored.")
+    dispatch = {"cursor": cmd_setup_cursor, "claude": cmd_setup_claude,
+                "codex": cmd_setup_codex}
+    dispatch[args.harness](args)
+
+
 def cmd_setup_cursor(args: argparse.Namespace) -> None:
     """Wire a workspace as a Cursor agent: project `.cursor/mcp.json`, the
     shared etiquette rule, and optionally the shared stop-hook (Cursor's
@@ -1199,44 +1215,43 @@ def build_parser() -> argparse.ArgumentParser:
                  "local key cache and is embedded in the harness config — the "
                  "admin key is then never needed on this machine")
 
-    sc = sub.add_parser("setup-cursor", help="wire a workspace as an agora agent")
-    sc.add_argument("agent", help="agent id, e.g. runtime")
-    sc.add_argument("--workspace", default=".", help="workspace folder (default: cwd)")
-    sc.add_argument("--about", default="", help="self-description for this agent")
-    sc.add_argument("--url", default=None)
-    sc.add_argument("--key", default=None, metavar="AGENT_KEY", help=_KEY_HELP)
-    sc.add_argument("--with-hook", action=argparse.BooleanOptionalAction,
-                    default=True,
-                    help="install the wake stop-hook (default: on; --no-hook to skip)")
-    sc.add_argument("--headless", action="store_true",
-                    help="dedicated seat (no human sharing the tab): the "
-                         "reception loop widens its idle window to 1200s to "
-                         "save inferences (~15/hr/seat -> ~3). Do NOT use for a "
-                         "human-shared tab — a long window delays typed prompts")
-    sc.set_defaults(func=cmd_setup_cursor)
+    def _setup_common_args(sp, *, headless: bool) -> None:
+        """The flags shared by every harness setup (one definition — the
+        `--with-hooks` lesson: per-harness copies drift)."""
+        sp.add_argument("agent", help="agent id, e.g. runtime")
+        sp.add_argument("--workspace", default=".",
+                        help="workspace folder (default: cwd)")
+        sp.add_argument("--about", default="",
+                        help="self-description for this agent")
+        sp.add_argument("--url", default=None)
+        sp.add_argument("--key", default=None, metavar="AGENT_KEY", help=_KEY_HELP)
+        sp.add_argument("--with-hook", action=argparse.BooleanOptionalAction,
+                        default=True,
+                        help="install the wake/stop hooks (default: on; "
+                             "--no-hook to skip)")
+        if headless:
+            sp.add_argument("--headless", action="store_true",
+                            help="dedicated Cursor seat (no human sharing the "
+                                 "tab): the background listener widens its idle "
+                                 "window to 1200s to save empty iterations. Do "
+                                 "NOT use for a human-shared tab")
 
-    scl = sub.add_parser("setup-claude", help="wire a workspace as a Claude Code agent")
-    scl.add_argument("agent", help="agent id, e.g. castor")
-    scl.add_argument("--workspace", default=".", help="workspace folder (default: cwd)")
-    scl.add_argument("--about", default="", help="self-description for this agent")
-    scl.add_argument("--url", default=None)
-    scl.add_argument("--key", default=None, metavar="AGENT_KEY", help=_KEY_HELP)
-    scl.add_argument("--with-hook", action=argparse.BooleanOptionalAction,
-                     default=True,
-                     help="install the wake hooks (default: on; --no-hook to skip)")
-    scl.set_defaults(func=cmd_setup_claude)
+    st = sub.add_parser("setup",
+                        help="wire a workspace as an agora agent: "
+                             "setup cursor|claude|codex <id>")
+    st_sub = st.add_subparsers(dest="harness", required=True)
+    for h in ("cursor", "claude", "codex"):
+        sp = st_sub.add_parser(h, help=f"wire this workspace for {h}")
+        _setup_common_args(sp, headless=(h == "cursor"))
+        sp.set_defaults(func=cmd_setup, harness=h)
 
-    scx = sub.add_parser("setup-codex", help="wire a workspace as a Codex CLI agent")
-    scx.add_argument("agent", help="agent id, e.g. janus")
-    scx.add_argument("--workspace", default=".", help="workspace folder (default: cwd)")
-    scx.add_argument("--about", default="", help="self-description for this agent")
-    scx.add_argument("--url", default=None)
-    scx.add_argument("--key", default=None, metavar="AGENT_KEY", help=_KEY_HELP)
-    scx.add_argument("--with-hook", action=argparse.BooleanOptionalAction,
-                     default=True,
-                     help="install the Stop hook (.codex/hooks.json) at turn "
-                          "ends (default: on; --no-hook to skip)")
-    scx.set_defaults(func=cmd_setup_codex)
+    # Deprecated aliases (one release, per the simplicity audit): same flags,
+    # same handlers, a one-line nudge toward `agora setup <harness>`.
+    for h in ("cursor", "claude", "codex"):
+        alias = sub.add_parser(f"setup-{h}")
+        _setup_common_args(alias, headless=(h == "cursor"))
+        alias.set_defaults(func=cmd_setup, harness=h,
+                           deprecated_alias=f"setup-{h}")
 
     rg = sub.add_parser("register",
                         help="operator: register an agent on the hub and print "

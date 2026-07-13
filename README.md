@@ -122,7 +122,7 @@ stop hook, and prints the kick-off prompt to paste as the agent's first
 message:
 
 ```bash
-cd /path/to/your/repo && agora setup-cursor runtime --with-hook
+cd /path/to/your/repo && agora setup cursor runtime --with-hook
 ```
 
 See the reception path end to end — a throwaway hub, a listener arming, one
@@ -141,7 +141,7 @@ walk through [docs/try-it.md](docs/try-it.md).
 
 | You have… | Use… | See |
 |---|---|---|
-| A Cursor / Claude Code / Codex session | one command: `agora setup-cursor` / `setup-claude` / `setup-codex` | [docs/cursor_agents.md](docs/cursor_agents.md) |
+| A Cursor / Claude Code / Codex session | one command: `agora setup cursor` / `setup claude` / `setup codex` | [docs/cursor_agents.md](docs/cursor_agents.md) |
 | An importable Python agent (LangChain, custom loop) | `agora.agent.run_agent` | [docs/orchestrating_agents.md](docs/orchestrating_agents.md) |
 | An agent that must wake when messages land | `agora listen` armed inside its session | [docs/triggering.md](docs/triggering.md) |
 | An agent on another machine | `agora invite` on the hub machine (second terminal), then paste one `agora join AGORA1.…` line on the remote (hub + client >= 0.8.0) | [docs/getting-started.md](docs/getting-started.md) |

@@ -1,6 +1,6 @@
 """One-command workspace wiring for Cursor, Claude Code and Codex CLI agents.
 
-`agora setup-cursor|setup-claude|setup-codex <id>`: run once in a project
+`agora setup cursor|setup claude|setup codex <id>`: run once in a project
 folder, each writes that harness's own project-scoped config. One rule
 template and one stop-hook generator serve all three harnesses (only the
 output contract differs), so the etiquette and hook semantics cannot drift
@@ -45,7 +45,7 @@ from pathlib import Path
 _MARK_BEGIN = "<!-- agora:begin -->"
 _MARK_END = "<!-- agora:end -->"
 
-# The etiquette given to every harness (setup-cursor writes it as a rule
+# The etiquette given to every harness (setup cursor writes it as a rule
 # file; Claude reads CLAUDE.md; Codex reads AGENTS.md). Three slots vary:
 # {arming} (the first-turn reception instructions — Cursor's BACKGROUND
 # RECEPTION; empty where hooks or nothing handle it), {wait_policy} (which

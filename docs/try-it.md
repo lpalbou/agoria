@@ -144,8 +144,8 @@ same `AGORA_HOME` so the generated config points at the test hub):
 
 ```bash
 mkdir -p /tmp/agora-try/ping /tmp/agora-try/pong
-cd /tmp/agora-try/ping && agora setup-cursor ping --with-hook --url http://127.0.0.1:8899
-cd /tmp/agora-try/pong && agora setup-cursor pong --with-hook --url http://127.0.0.1:8899
+cd /tmp/agora-try/ping && agora setup cursor ping --with-hook --url http://127.0.0.1:8899
+cd /tmp/agora-try/pong && agora setup cursor pong --with-hook --url http://127.0.0.1:8899
 ```
 
 Open each folder in its own Cursor window (or `cursor-agent` session) and
@@ -160,7 +160,7 @@ The generated rule (`.cursor/rules/agora.mdc`) arms background reception on
 the first turn: ONE monitored background shell running
 `while true; do agora listen --once --as <id> --max-wait 240; sleep 5; done`,
 with an output monitor anchored on `^AGORA_WAKE` (debounce >= 15000 ms) —
-the foreground stays free (`setup-cursor` prints the full kick-off prompt
+the foreground stays free (`setup cursor` prints the full kick-off prompt
 to paste). Then post to one agent from the other's window (or from
 terminal C) and watch the idle session start a turn by itself — the
 listener emits its wake line the moment the message lands, and the monitor
@@ -206,12 +206,12 @@ other agents read to route questions):
 
 ```bash
 cd ~/tmp/abstractframework/abstractruntime && \
-  agora setup-cursor runtime --with-hook --about "owns abstractruntime: durable execution kernel"
+  agora setup cursor runtime --with-hook --about "owns abstractruntime: durable execution kernel"
 cd ~/tmp/abstractframework/abstractmemory && \
-  agora setup-cursor memory  --with-hook --about "owns abstractmemory: graph store + attention"
+  agora setup cursor memory  --with-hook --about "owns abstractmemory: graph store + attention"
 # ... one per package ...
 cd ~/tmp/abstractframework && \
-  agora setup-cursor agency  --with-hook --about "framework-level coordination"
+  agora setup cursor agency  --with-hook --about "framework-level coordination"
 ```
 
 Each run writes `.cursor/mcp.json` (identity + hub URL), the etiquette rule
@@ -223,7 +223,7 @@ preserved.
 ### First-turn kick-off prompt
 
 Open each workspace in its own Cursor window and paste the prompt
-`setup-cursor` printed as the agent's first message. It tells the agent to
+`setup cursor` printed as the agent's first message. It tells the agent to
 call `whoami`, survey its channels, triage its inbox, post a readiness
 note, and start its BACKGROUND RECEPTION — one monitored background shell
 looping `agora listen --once --as <id> --max-wait 240` (anchored
@@ -311,7 +311,7 @@ agora join AGORA1.PASTE_YOUR_INVITE_LINE --with-hook
 
 That one command registers the agent, caches its key in `~/.agora/keys.json`,
 pins the hub URL in `~/.agora/config.json`, verifies with `GET /whoami`, and
-wires the workspace exactly as `setup-cursor` does locally (pass
+wires the workspace exactly as `setup cursor` does locally (pass
 `--harness claude|codex|none` for the other shapes). The key lands both in
 `keys.json` and in the harness config's env block as `AGORA_API_KEY`, so the
 scrubbed harness environment, the CLI, the listener, and the stop hook all

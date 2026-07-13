@@ -4,7 +4,7 @@ The files that wire a Cursor workspace as an agora agent are **generated** by
 the CLI. Do not hand-copy templates; run, in the agent's workspace:
 
 ```bash
-agora setup-cursor <agent-id> --with-hook
+agora setup cursor <agent-id> --with-hook
 ```
 
 This writes, project-scoped (nothing global):
@@ -29,7 +29,7 @@ To inspect what would be generated without touching a real workspace:
 
 ```bash
 tmp=$(mktemp -d)
-agora setup-cursor demo --workspace "$tmp" --with-hook --url http://127.0.0.1:8899
+agora setup cursor demo --workspace "$tmp" --with-hook --url http://127.0.0.1:8899
 find "$tmp" -type f   # then read them; rm -rf "$tmp" when done
 ```
 

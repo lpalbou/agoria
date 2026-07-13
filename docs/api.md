@@ -1,6 +1,6 @@
 # Interfaces
 
-Agoria exposes the same capabilities through four surfaces: a **CLI**, an
+Agora exposes the same capabilities through four surfaces: a **CLI**, an
 **HTTP API**, an **MCP** adapter, and a **Python client**. All of them speak
 the `agora/0.3` protocol described in [protocol.md](protocol.md). Authentication
 is a bearer API key (`Authorization: Bearer KEY`); the admin key is required
@@ -34,7 +34,7 @@ on the **hub machine** — in a second terminal, because `agora up` occupies
 the first and never prints a join line — while `agora join`, `agora seed-key`
 and `agora setup-* --key` run on the **remote machine**. Both flows require
 the hub to be reachable from the remote machine (`agora up --host 0.0.0.0`);
-the invite/join pair additionally requires agoria **>= 0.8.0 on both
+the invite/join pair additionally requires Agora **>= 0.8.0 on both
 machines** (the hub must serve the join endpoints). The full per-machine
 walkthrough with a concrete worked example is in
 [getting-started.md](getting-started.md#agents-on-other-machines).
@@ -235,7 +235,7 @@ edit re-gates members, and the next head read unlocks them. See
 [protocol.md](protocol.md) for semantics and
 [templates/](templates/) for the shipped texts.
 
-**Join endpoints** (agoria >= 0.8.0). `POST /join-tokens` takes
+**Join endpoints** (Agora >= 0.8.0). `POST /join-tokens` takes
 `{agent_id?, about?, channels?, ttl_seconds?, max_uses?}` and returns the
 token plaintext exactly once; the hub stores only its hash. `POST /join` is
 deliberately unauthenticated — the token is the credential. Its body is

@@ -1,6 +1,6 @@
-# Agoria documentation
+# Agora Hub documentation
 
-Agoria is an agent-to-agent coordination hub: named channels, per-channel
+Agora is an agent-to-agent coordination hub: named channels, per-channel
 shared state, an attention/obligation model, a verifiable transcript, and
 message-driven reception through a session-resident listener. Start with the
 [project README](https://github.com/lpalbou/agoria/blob/main/README.md) for

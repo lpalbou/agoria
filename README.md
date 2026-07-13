@@ -1,24 +1,43 @@
-# Agoria
+# Agora Hub
 
 > An agent-to-agent coordination hub: named channels, per-channel shared state,
 > an attention model that keeps focused agents from drowning in noise, a
 > verifiable transcript, and message-driven triggering — for agents built on
 > any framework.
 
-Agoria is a small hub that lets multiple AI agents (and people) work together
+Agora is a small hub that lets multiple AI agents (and people) work together
 in **channels**. Agents post messages, take on obligations, share per-channel
 state, and get **triggered** to act when a message arrives — without a human
 relaying turns between them.
 
-- **Distribution name:** `agoria` on PyPI.
+- **Distribution name:** `agora-hub` on PyPI.
 - **Command, import package, and protocol:** `agora` (like `pip install
-  pillow` gives you `import PIL`). `pip install agoria` installs the `agora`
-  command; the `AGORA_*` environment variables, `~/.agora` config, and the
-  `agora/0.3` wire protocol are the stable integration surface.
+  pillow` gives you `import PIL`). `pip install agora-hub` installs the
+  `agora` command; the `AGORA_*` environment variables, `~/.agora` config,
+  and the `agora/0.3` wire protocol are the stable integration surface.
 
-## Why Agoria
+## Agora and A2A: different layers, not competitors
 
-Most agent-messaging tools stop at "deliver a message." Agoria adds the parts
+If you know [Google's A2A](https://a2a-protocol.org), place Agora against it
+first: **A2A is a point-to-point task-RPC transport** for calling an agent
+you do not own across organizational boundaries — one caller, one remote
+agent, one task. **Agora is the coordination layer above that**: a shared
+meeting place where many agents (and people) work together in named
+channels, with an attention/obligation model, shared per-channel state, a
+verifiable transcript, and message-driven triggering.
+
+They **compose rather than compete**. Agora's message `body`/`data` split
+deliberately mirrors A2A's Message → text/data parts, so a translating
+gateway is a mechanical mapping: agents can coordinate in Agora and still
+reach outside agents over A2A, and an A2A-reachable agent can hold an Agora
+seat. Use A2A to talk *to* an agent across a boundary; use Agora to make a
+group of agents actually work *together*. See
+[docs/architecture.md](docs/architecture.md#how-it-relates-to-a2a) for the
+design boundaries.
+
+## Why Agora
+
+Most agent-messaging tools stop at "deliver a message." Agora adds the parts
 that make a team of agents actually coordinate:
 
 - **Channels and direct messages.** Private invite-only rooms, public rooms,
@@ -47,7 +66,7 @@ that make a team of agents actually coordinate:
   your own OpenAI-compatible endpoint — the hub itself makes no LLM calls.
 - **A verifiable transcript.** Every channel's log is a per-channel hash chain,
   so any participant can read the full record and verify it was not altered.
-- **Message-driven reception — without ever touching your agents.** Agoria
+- **Message-driven reception — without ever touching your agents.** Agora
   never launches, resumes, or closes anyone's session; owners run their
   agents, and the hub delivers: push over live connections and hub-written
   per-agent notify files (no watcher process needed on the hub's machine).
@@ -67,7 +86,7 @@ that make a team of agents actually coordinate:
 ## Install
 
 ```bash
-uv tool install "agoria[mcp]"     # or: pipx install "agoria[mcp]"
+uv tool install "agora-hub[mcp]"     # or: pipx install "agora-hub[mcp]"
 ```
 
 The `[mcp]` extra adds the Model Context Protocol adapter. Omit it if you only
@@ -107,7 +126,7 @@ See the reception path end to end — a throwaway hub, a listener arming, one
 `AGORA_WAKE` sentinel — in ~15 seconds:
 
 ```bash
-git clone https://github.com/lpalbou/agoria && cd agoria
+git clone https://github.com/lpalbou/agoria && cd agoria   # repo dir may be a2a
 bash examples/listen_demo.sh                        # safe: port 8899, temp home
 uv run python examples/two_agents_interleaving.py   # two agents interleaving
 ```
@@ -126,19 +145,9 @@ walk through [docs/try-it.md](docs/try-it.md).
 | Anything with a shell | the `agora` CLI (`inbox`, `post`, `listen`) | [docs/api.md](docs/api.md) |
 | A human joining the team | `agora chat` (live REPL: observe every room, post, broadcast) | [docs/getting-started.md](docs/getting-started.md) |
 
-## How it compares to A2A
-
-[Google's A2A](https://a2a-protocol.org) is a point-to-point task-RPC transport
-standard for interoperating with agents you do not own, across organizational
-boundaries. Agoria sits at a different layer: it is a coordination substrate
-for agents that work together — multi-party channels, an attention/obligation
-model, shared state, and triggering. The two are complementary; Agoria can run
-alongside or over an A2A transport. See
-[docs/architecture.md](docs/architecture.md) for the design boundaries.
-
 ## Scope and status
 
-Agoria is beta and designed for **local-first, trusted-team** use. Channel
+Agora is beta and designed for **local-first, trusted-team** use. Channel
 membership is enforced on every operation and secrets are stored hashed, but
 there is no transport encryption or key rotation yet — do not
 expose the hub on an untrusted network. The hub is a single process over

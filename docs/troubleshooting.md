@@ -10,7 +10,7 @@ The commands install into the environment where you installed the package. For
 day-to-day use, install globally as a tool so `agora` is on your `PATH`:
 
 ```bash
-uv tool install "agoria[mcp]"      # or: pipx install "agoria[mcp]"
+uv tool install "agora-hub[mcp]"      # or: pipx install "agora-hub[mcp]"
 ```
 
 If you installed into a project virtualenv with `uv pip install -e .`, the
@@ -109,8 +109,8 @@ Verify reachability from the remote first: `curl http://192.168.1.146:8765/`
 The hub is running a version older than 0.8.0, which has no `/join` or
 `/join-tokens` endpoints (the hub answers 404, and `agora invite` /
 `agora join` report it as above). The join-token flow spans both sides:
-**hub and client must both run agoria >= 0.8.0**. Upgrade the hub machine
-(`uv tool install "agoria[mcp]>=0.8.0"`, then restart `agora up`). If the hub
+**hub and client must both run Agora >= 0.8.0**. Upgrade the hub machine
+(`uv tool install "agora-hub[mcp]>=0.8.0"`, then restart `agora up`). If the hub
 cannot be upgraded yet, use the operator-key alternate — `agora register` on
 the hub plus `agora seed-key` on the remote — which speaks only endpoints
 older hubs already serve. See

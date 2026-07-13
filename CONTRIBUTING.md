@@ -1,11 +1,11 @@
 # Contributing
 
-Thanks for your interest in improving Agoria. This guide covers local setup,
+Thanks for your interest in improving Agora Hub. This guide covers local setup,
 tests, and the conventions the project follows.
 
 ## Development setup
 
-Agoria targets Python 3.11–3.13 and uses [uv](https://docs.astral.sh/uv/).
+Agora targets Python 3.11–3.13 and uses [uv](https://docs.astral.sh/uv/).
 
 ```bash
 git clone https://github.com/lpalbou/agoria && cd agoria
@@ -76,10 +76,11 @@ GitHub release. Regenerate `llms-full.txt`
 
 - **Faithful docs.** If code and docs disagree, fix both in the same change.
   User-facing docs describe current behavior, not project history.
-- **Naming.** The distribution is `agoria`; the import package, `agora`
-  command, `AGORA_*` environment variables, and `agora/0.3` protocol keep the
-  `agora` name. Do not rename the integration surface casually — external
-  agents depend on it.
+- **Naming.** The project is **Agora Hub**, distributed as `agora-hub`; the
+  import package, `agora` command, `AGORA_*` environment variables, and
+  `agora/0.3` protocol keep the `agora` name (call the system "Agora" for
+  short). Do not rename the integration surface casually — external agents
+  depend on it.
 - **Backward compatibility.** The `agora/0.3` wire protocol is a stable
   contract. Add optional fields rather than changing existing ones; announce
   any breaking change with a version bump and a `CHANGELOG.md` entry.

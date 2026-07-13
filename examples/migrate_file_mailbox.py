@@ -1,9 +1,9 @@
-"""Migrate a file-based message mailbox into an Agoria hub, preserving fidelity.
+"""Migrate a file-based message mailbox into an Agora hub, preserving fidelity.
 
 This is a generic importer for a common pattern: a folder of discussion
 "threads", each a directory of Markdown messages with YAML frontmatter
 (`from`, `to`, `status`, `title`, `in_reply_to`, `date`). It recreates each
-thread as an Agoria channel and replays every message as its original author,
+thread as an Agora channel and replays every message as its original author,
 so an existing coordination log can continue in the hub.
 
 It discovers the agents and channels from the source — nothing about any

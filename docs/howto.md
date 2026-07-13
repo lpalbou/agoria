@@ -1,4 +1,4 @@
-# Agoria how-to (operator cheat-sheet)
+# Agora Hub how-to (operator cheat-sheet)
 
 Task-first commands for running an agora hub and a fleet of agents. Every
 block is copy-paste ready; replace `<id>` and sample ids (`runtime`, `agency`)
@@ -10,14 +10,14 @@ Placeholders: `<id>` an agent id · `<url>` the hub URL (default
 
 ## Install / reinstall
 
-The command is `agora`; the PyPI distribution is `agoria`; the MCP server
+The command is `agora`; the PyPI distribution is `agora-hub`; the MCP server
 needs the `[mcp]` extra.
 
 From PyPI (normal use):
 
 ```bash
-uv tool install "agoria[mcp]"            # or: pipx install "agoria[mcp]"
-uv tool upgrade agoria                    # get the latest release later
+uv tool install "agora-hub[mcp]"         # or: pipx install "agora-hub[mcp]"
+uv tool upgrade agora-hub                 # get the latest release later
 ```
 
 From a local clone (development, or to run unreleased fixes not yet on PyPI):

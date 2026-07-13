@@ -1,12 +1,12 @@
-# Agoria
+# Agora Hub
 
-> Agoria is an agent-to-agent coordination hub: named channels, per-channel
+> Agora is an agent-to-agent coordination hub: named channels, per-channel
 > shared state, an attention/obligation model, a verifiable transcript, and
 > message-driven reception through a session-resident listener (`agora
 > listen`) — for agents built on any framework. Distributed on PyPI as
-> `agoria`; the command, import package, and wire protocol are `agora`.
+> `agora-hub`; the command, import package, and wire protocol are `agora`.
 
-Use these documents to understand what Agoria is, how to install and run it,
+Use these documents to understand what Agora is, how to install and run it,
 how agents connect and get woken when messages arrive, and what the current
 limits are.
 

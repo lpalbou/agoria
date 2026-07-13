@@ -3,22 +3,24 @@
 Common questions and limitations. For setup problems see
 [troubleshooting.md](troubleshooting.md).
 
-## Why is the package `agoria` but the command `agora`?
+## Why is the package `agora-hub` but the command `agora`?
 
-`agora` was unavailable on PyPI, so the distribution is `agoria`. The command,
-import package, `AGORA_*` environment variables, `~/.agora` config, and the
-`agora/0.3` protocol keep the `agora` name — they are the stable integration
-surface that agents and configs depend on. This is the same pattern as
-`pip install pillow` giving you `import PIL`.
+The project is **Agora Hub**, distributed on PyPI as `agora-hub` (plain
+`agora` was unavailable). The command, import package, `AGORA_*` environment
+variables, `~/.agora` config, and the `agora/0.3` protocol keep the `agora`
+name — they are the stable integration surface that agents and configs
+depend on, so you can call the system "Agora" for short. This is the same
+pattern as `pip install pillow` giving you `import PIL`.
 
 ## How is this different from Google's A2A?
 
 A2A is a point-to-point task-RPC transport for interoperating with agents you
-do not own, across organizational boundaries. Agoria is a coordination layer
+do not own, across organizational boundaries. Agora is a coordination layer
 for agents that work together: multi-party channels, shared per-channel state,
 an attention/obligation model, a verifiable transcript, and triggering. They
-sit at different layers and can be combined. See
-[architecture.md](architecture.md).
+sit at different layers and compose — Agora's `body`/`data` split mirrors
+A2A's parts, so a translating gateway is mechanical. See
+[architecture.md](architecture.md#how-it-relates-to-a2a).
 
 ## Do agents get "pushed" a message, or do they poll?
 
@@ -32,7 +34,7 @@ while the session is idle. What no system can do is wake a process that is
 not running — see [triggering.md](triggering.md) for the honest per-framework
 picture.
 
-## How does an idle agent get woken without agoria touching its session?
+## How does an idle agent get woken without Agora touching its session?
 
 Only the session itself can create a turn in itself, so `agora listen`
 adapts to what each harness offers. Claude Code sessions arm it from hooks
@@ -127,14 +129,14 @@ its key where every surface reads it, and wires the workspace. The paste
 carries a single-use, expiring, revocable join token — never the admin key,
 which stays on the hub machine.
 The hub must be reachable from the remote (`agora up --host 0.0.0.0`) and
-both machines need agoria 0.8.0 or newer; if the hub cannot be upgraded,
+both machines need Agora 0.8.0 or newer; if the hub cannot be upgraded,
 `agora register` (hub) + `agora seed-key` (remote) carries one agent key
 across instead. See
 [getting-started.md](getting-started.md#agents-on-other-machines).
 
 ## Is it safe to expose the hub on a network?
 
-Not yet. Agoria is local-first and trusted-team: there is no transport
+Not yet. Agora is local-first and trusted-team: there is no transport
 encryption or key rotation. Keep the hub on localhost or a
 trusted LAN, behind a TLS-terminating proxy if it must cross a network. Join
 tokens bound what a leaked *onboarding* credential can do — one non-operator
@@ -181,7 +183,7 @@ memory of the conversation. See "One identity, many turns" in
 
 It is retired. Its delivery commands resumed or spawned harness sessions
 (`codex exec resume`, `claude -p --resume`, `cursor-agent --resume`), and
-agoria's scope ruling is that nothing may create, resume, or close an agent's
+Agora's scope ruling is that nothing may create, resume, or close an agent's
 session — the agent *is* the running session its owner started. Reception is
 now the session-resident listener: `agora listen`, armed inside the agent's
 own session. The `agora-attache` command still exists but only prints a

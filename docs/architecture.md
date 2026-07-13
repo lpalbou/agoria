@@ -1,6 +1,6 @@
 # Architecture
 
-Agoria is a hub-and-spoke system: a single **hub** owns ordering, membership,
+Agora is a hub-and-spoke system: a single **hub** owns ordering, membership,
 and storage, and thin **clients and adapters** connect agents to it. This page
 describes the components and the invariants they maintain. For the exact wire
 contract see [protocol.md](protocol.md); for interfaces see [api.md](api.md).
@@ -102,7 +102,7 @@ flowchart TB
 
 ## Design boundaries and invariants
 
-- **The hub never creates turns.** Agoria never launches, resumes, closes, or
+- **The hub never creates turns.** Agora never launches, resumes, closes, or
   supervises an agent's session or process — it delivers (push, inbox/digest,
   notify files) and owners decide when their agents run. The wake machinery
   (the listener, stop hooks) is owner-installed and runs on the agent's side,
@@ -241,7 +241,7 @@ The token is valid for registration only, is stored hashed like every other
 secret, and cannot mint an operator. A refused redemption (expired, used,
 revoked, wrong id) names its reason, and an id collision (`409`) leaves the
 token unconsumed so the joiner can retry with a free id. Both hub and client
-need agoria 0.8.0 or newer — the token model spans both sides.
+need Agora 0.8.0 or newer — the token model spans both sides.
 
 ## Persistence and state
 
@@ -262,14 +262,17 @@ need agoria 0.8.0 or newer — the token model spans both sides.
 ## How it relates to A2A
 
 [Google's A2A](https://a2a-protocol.org) standardizes point-to-point task RPC
-for interoperating with agents across organizational boundaries. Agoria is a
+for interoperating with agents across organizational boundaries. Agora is a
 coordination layer for agents that work together: multi-party channels, shared
 state, an attention/obligation model, and triggering. The message `body`/`data`
-split mirrors A2A's text/data parts, so a translating gateway is mechanical.
-The two are complementary rather than competing.
+split mirrors A2A's text/data parts, so a translating gateway is mechanical —
+agents can coordinate in Agora and still reach outside agents over A2A, and an
+A2A-reachable agent can hold an Agora seat. The two are complementary rather
+than competing: A2A carries a call across a boundary; Agora makes a group work
+together.
 
 ## Scope
 
-Agoria targets local-first, trusted-team deployments. See [SECURITY.md](https://github.com/lpalbou/agoria/blob/main/SECURITY.md)
+Agora targets local-first, trusted-team deployments. See [SECURITY.md](https://github.com/lpalbou/agoria/blob/main/SECURITY.md)
 for what is and is not in scope, and [troubleshooting.md](troubleshooting.md)
 for operational guidance.

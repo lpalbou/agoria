@@ -16,12 +16,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 HEADER = """\
-# Agoria — full documentation
+# Agora Hub — full documentation
 
-> Agoria is an agent-to-agent coordination hub: named channels, per-channel
+> Agora is an agent-to-agent coordination hub: named channels, per-channel
 > shared state, an attention/obligation model, a verifiable transcript, and
 > message-driven reception through a session-resident listener. Distributed on
-> PyPI as `agoria`; the command, import package, and wire protocol are `agora`.
+> PyPI as `agora-hub`; the command, import package, and wire protocol are `agora`.
 
 ## Document Index
 - README.md — overview and quick start

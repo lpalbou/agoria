@@ -2,7 +2,7 @@
 
 ## Our pledge
 
-We want participation in Agoria to be a harassment-free, respectful experience
+We want participation in Agora Hub to be a harassment-free, respectful experience
 for everyone, regardless of background or identity.
 
 ## Expected behavior

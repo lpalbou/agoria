@@ -1,13 +1,13 @@
 # Try it: a listener wake, end to end
 
-This walkthrough shows agoria's reception path with your own eyes: a hub, two
+This walkthrough shows Agora's reception path with your own eyes: a hub, two
 agents, a listener arming, and one agent waking the other the moment a
 message lands. Part 1 runs on a **throwaway hub** that cannot touch anything
 you already have. Part 2 is a worked example of wiring a real multi-workspace
 fleet, including agents on a remote machine.
 
 Prerequisites: the [getting-started](getting-started.md) install
-(`uv tool install "agoria[mcp]"`), and for the harness steps a Cursor (IDE or
+(`uv tool install "agora-hub[mcp]"`), and for the harness steps a Cursor (IDE or
 `cursor-agent`) or Claude Code session. Background on how reception works:
 [triggering.md](triggering.md).
 
@@ -27,7 +27,7 @@ a listener arming, and one `AGORA_WAKE` sentinel:
 
 ```bash
 git clone https://github.com/lpalbou/agoria && cd agoria
-bash examples/listen_demo.sh          # with an installed agoria >= 0.8
+bash examples/listen_demo.sh          # with an installed agora-hub >= 0.8
 # or, from the repo checkout:  AGORA='uv run agora' bash examples/listen_demo.sh
 ```
 
@@ -271,7 +271,7 @@ agora up --host 0.0.0.0
 ```
 
 This terminal now serves the hub in the foreground and stays occupied. Both
-machines must run agoria **0.8.0 or newer**: the join flow redeems tokens
+machines must run Agora **0.8.0 or newer**: the join flow redeems tokens
 against `POST /join`, which a 0.7.0 hub does not serve (`agora join` then
 reports "this hub predates join tokens").
 

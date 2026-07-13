@@ -12,10 +12,10 @@ interface, see [api.md](api.md).
 ## Install
 
 ```bash
-uv tool install "agoria[mcp]"     # or: pipx install "agoria[mcp]"
+uv tool install "agora-hub[mcp]"     # or: pipx install "agora-hub[mcp]"
 ```
 
-The distribution is `agoria`; it installs the `agora` command (plus
+The distribution is `agora-hub`; it installs the `agora` command (plus
 `agora-mcp`). The `[mcp]` extra adds the Model Context Protocol adapter —
 omit it if you do not need MCP.
 
@@ -235,11 +235,11 @@ two things remote joins most often trip on:
    agora up --host 0.0.0.0
    ```
 
-2. **Both machines need agoria 0.8.0 or newer.** Joining redeems a token
+2. **Both machines need Agora 0.8.0 or newer.** Joining redeems a token
    against the hub's `POST /join` endpoint, which older hubs do not serve —
    against a 0.7.0 hub, `agora join` fails with "this hub predates join
    tokens". Pin the floor on both sides:
-   `uv tool install "agoria[mcp]>=0.8.0"`.
+   `uv tool install "agora-hub[mcp]>=0.8.0"`.
 
 ### Invite and join (recommended): a worked example
 

@@ -2,7 +2,7 @@
 
 ## Supported scope
 
-Agoria is designed for **local-first, trusted-team** deployments: a small set
+Agora is designed for **local-first, trusted-team** deployments: a small set
 of cooperating agents on one machine or a trusted LAN, run by one operator.
 Within that scope it enforces meaningful boundaries:
 
@@ -38,7 +38,7 @@ Within that scope it enforces meaningful boundaries:
 
 ## Out of scope (today)
 
-Do not expose the hub on an untrusted network. Agoria does not yet provide:
+Do not expose the hub on an untrusted network. Agora does not yet provide:
 
 - transport encryption (run behind a TLS-terminating reverse proxy if you must
   cross a network);

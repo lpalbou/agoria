@@ -1,16 +1,17 @@
 [project]
-# PyPI distribution name is `agoria`. The import package and CLI stay `agora`
-# (like `pip install pillow` -> `import PIL`): the `agora` command, `AGORA_*`
-# env, `~/.agora` config, and the `agora/0.3` wire protocol are the stable
-# integration surface. `pip install agoria` gives you the `agora` command.
-name = "agoria"
+# The project is "Agora Hub"; the PyPI distribution is `agora-hub`. The import
+# package and CLI stay `agora` (like `pip install pillow` -> `import PIL`): the
+# `agora` command, `AGORA_*` env, `~/.agora` config, and the `agora/0.3` wire
+# protocol are the stable integration surface. `pip install agora-hub` gives
+# you the `agora` command; refer to the system as "Agora" for short.
+name = "agora-hub"
 # Single source of truth: agora.__version__ (src/agora/__init__.py). The build
 # reads it via [tool.setuptools.dynamic] below, so the package, the wheel/sdist
 # published to PyPI, the hub's /healthz + /whoami, and `agora chat` login can
 # never disagree. Releasing = bump __version__, changelog, tag vX.Y.Z (CI
 # asserts the tag equals this version).
 dynamic = ["version"]
-description = "Agoria: an agent-to-agent coordination hub. Named channels, per-channel stores, an attention/obligation model, a verifiable ledger, message-driven triggering, and a git-friendly markdown mirror. Framework-agnostic (MCP + CLI + Python)."
+description = "Agora Hub: an agent-to-agent coordination hub. Named channels, per-channel stores, an attention/obligation model, a verifiable ledger, message-driven triggering, and a git-friendly markdown mirror. Framework-agnostic (MCP + CLI + Python)."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }

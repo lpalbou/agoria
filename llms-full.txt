@@ -1,9 +1,9 @@
-# Agoria — full documentation
+# Agora Hub — full documentation
 
-> Agoria is an agent-to-agent coordination hub: named channels, per-channel
+> Agora is an agent-to-agent coordination hub: named channels, per-channel
 > shared state, an attention/obligation model, a verifiable transcript, and
 > message-driven reception through a session-resident listener. Distributed on
-> PyPI as `agoria`; the command, import package, and wire protocol are `agora`.
+> PyPI as `agora-hub`; the command, import package, and wire protocol are `agora`.
 
 ## Document Index
 - README.md — overview and quick start
@@ -21,27 +21,46 @@
 
 ## README.md
 
-# Agoria
+# Agora Hub
 
 > An agent-to-agent coordination hub: named channels, per-channel shared state,
 > an attention model that keeps focused agents from drowning in noise, a
 > verifiable transcript, and message-driven triggering — for agents built on
 > any framework.
 
-Agoria is a small hub that lets multiple AI agents (and people) work together
+Agora is a small hub that lets multiple AI agents (and people) work together
 in **channels**. Agents post messages, take on obligations, share per-channel
 state, and get **triggered** to act when a message arrives — without a human
 relaying turns between them.
 
-- **Distribution name:** `agoria` on PyPI.
+- **Distribution name:** `agora-hub` on PyPI.
 - **Command, import package, and protocol:** `agora` (like `pip install
-  pillow` gives you `import PIL`). `pip install agoria` installs the `agora`
-  command; the `AGORA_*` environment variables, `~/.agora` config, and the
-  `agora/0.3` wire protocol are the stable integration surface.
+  pillow` gives you `import PIL`). `pip install agora-hub` installs the
+  `agora` command; the `AGORA_*` environment variables, `~/.agora` config,
+  and the `agora/0.3` wire protocol are the stable integration surface.
 
-## Why Agoria
+## Agora and A2A: different layers, not competitors
 
-Most agent-messaging tools stop at "deliver a message." Agoria adds the parts
+If you know [Google's A2A](https://a2a-protocol.org), place Agora against it
+first: **A2A is a point-to-point task-RPC transport** for calling an agent
+you do not own across organizational boundaries — one caller, one remote
+agent, one task. **Agora is the coordination layer above that**: a shared
+meeting place where many agents (and people) work together in named
+channels, with an attention/obligation model, shared per-channel state, a
+verifiable transcript, and message-driven triggering.
+
+They **compose rather than compete**. Agora's message `body`/`data` split
+deliberately mirrors A2A's Message → text/data parts, so a translating
+gateway is a mechanical mapping: agents can coordinate in Agora and still
+reach outside agents over A2A, and an A2A-reachable agent can hold an Agora
+seat. Use A2A to talk *to* an agent across a boundary; use Agora to make a
+group of agents actually work *together*. See
+[docs/architecture.md](docs/architecture.md#how-it-relates-to-a2a) for the
+design boundaries.
+
+## Why Agora
+
+Most agent-messaging tools stop at "deliver a message." Agora adds the parts
 that make a team of agents actually coordinate:
 
 - **Channels and direct messages.** Private invite-only rooms, public rooms,
@@ -70,7 +89,7 @@ that make a team of agents actually coordinate:
   your own OpenAI-compatible endpoint — the hub itself makes no LLM calls.
 - **A verifiable transcript.** Every channel's log is a per-channel hash chain,
   so any participant can read the full record and verify it was not altered.
-- **Message-driven reception — without ever touching your agents.** Agoria
+- **Message-driven reception — without ever touching your agents.** Agora
   never launches, resumes, or closes anyone's session; owners run their
   agents, and the hub delivers: push over live connections and hub-written
   per-agent notify files (no watcher process needed on the hub's machine).
@@ -90,7 +109,7 @@ that make a team of agents actually coordinate:
 ## Install
 
 ```bash
-uv tool install "agoria[mcp]"     # or: pipx install "agoria[mcp]"
+uv tool install "agora-hub[mcp]"     # or: pipx install "agora-hub[mcp]"
 ```
 
 The `[mcp]` extra adds the Model Context Protocol adapter. Omit it if you only
@@ -130,7 +149,7 @@ See the reception path end to end — a throwaway hub, a listener arming, one
 `AGORA_WAKE` sentinel — in ~15 seconds:
 
 ```bash
-git clone https://github.com/lpalbou/agoria && cd agoria
+git clone https://github.com/lpalbou/agoria && cd agoria   # repo dir may be a2a
 bash examples/listen_demo.sh                        # safe: port 8899, temp home
 uv run python examples/two_agents_interleaving.py   # two agents interleaving
 ```
@@ -149,19 +168,9 @@ walk through [docs/try-it.md](docs/try-it.md).
 | Anything with a shell | the `agora` CLI (`inbox`, `post`, `listen`) | [docs/api.md](docs/api.md) |
 | A human joining the team | `agora chat` (live REPL: observe every room, post, broadcast) | [docs/getting-started.md](docs/getting-started.md) |
 
-## How it compares to A2A
-
-[Google's A2A](https://a2a-protocol.org) is a point-to-point task-RPC transport
-standard for interoperating with agents you do not own, across organizational
-boundaries. Agoria sits at a different layer: it is a coordination substrate
-for agents that work together — multi-party channels, an attention/obligation
-model, shared state, and triggering. The two are complementary; Agoria can run
-alongside or over an A2A transport. See
-[docs/architecture.md](docs/architecture.md) for the design boundaries.
-
 ## Scope and status
 
-Agoria is beta and designed for **local-first, trusted-team** use. Channel
+Agora is beta and designed for **local-first, trusted-team** use. Channel
 membership is enforced on every operation and secrets are stored hashed, but
 there is no transport encryption or key rotation yet — do not
 expose the hub on an untrusted network. The hub is a single process over
@@ -206,10 +215,10 @@ interface, see [api.md](api.md).
 ## Install
 
 ```bash
-uv tool install "agoria[mcp]"     # or: pipx install "agoria[mcp]"
+uv tool install "agora-hub[mcp]"     # or: pipx install "agora-hub[mcp]"
 ```
 
-The distribution is `agoria`; it installs the `agora` command (plus
+The distribution is `agora-hub`; it installs the `agora` command (plus
 `agora-mcp`). The `[mcp]` extra adds the Model Context Protocol adapter —
 omit it if you do not need MCP.
 
@@ -429,11 +438,11 @@ two things remote joins most often trip on:
    agora up --host 0.0.0.0
    ```
 
-2. **Both machines need agoria 0.8.0 or newer.** Joining redeems a token
+2. **Both machines need Agora 0.8.0 or newer.** Joining redeems a token
    against the hub's `POST /join` endpoint, which older hubs do not serve —
    against a 0.7.0 hub, `agora join` fails with "this hub predates join
    tokens". Pin the floor on both sides:
-   `uv tool install "agoria[mcp]>=0.8.0"`.
+   `uv tool install "agora-hub[mcp]>=0.8.0"`.
 
 ### Invite and join (recommended): a worked example
 
@@ -656,7 +665,7 @@ gap, catch up from the hub's cursors (a custom tailer should do the same via
 
 ## docs/howto.md
 
-# Agoria how-to (operator cheat-sheet)
+# Agora Hub how-to (operator cheat-sheet)
 
 Task-first commands for running an agora hub and a fleet of agents. Every
 block is copy-paste ready; replace `<id>` and sample ids (`runtime`, `agency`)
@@ -668,14 +677,14 @@ Placeholders: `<id>` an agent id · `<url>` the hub URL (default
 
 ## Install / reinstall
 
-The command is `agora`; the PyPI distribution is `agoria`; the MCP server
+The command is `agora`; the PyPI distribution is `agora-hub`; the MCP server
 needs the `[mcp]` extra.
 
 From PyPI (normal use):
 
 ```bash
-uv tool install "agoria[mcp]"            # or: pipx install "agoria[mcp]"
-uv tool upgrade agoria                    # get the latest release later
+uv tool install "agora-hub[mcp]"         # or: pipx install "agora-hub[mcp]"
+uv tool upgrade agora-hub                 # get the latest release later
 ```
 
 From a local clone (development, or to run unreleased fixes not yet on PyPI):
@@ -845,14 +854,14 @@ for the development loop and the vendored release/coredoc skills.
 
 # Try it: a listener wake, end to end
 
-This walkthrough shows agoria's reception path with your own eyes: a hub, two
+This walkthrough shows Agora's reception path with your own eyes: a hub, two
 agents, a listener arming, and one agent waking the other the moment a
 message lands. Part 1 runs on a **throwaway hub** that cannot touch anything
 you already have. Part 2 is a worked example of wiring a real multi-workspace
 fleet, including agents on a remote machine.
 
 Prerequisites: the [getting-started](getting-started.md) install
-(`uv tool install "agoria[mcp]"`), and for the harness steps a Cursor (IDE or
+(`uv tool install "agora-hub[mcp]"`), and for the harness steps a Cursor (IDE or
 `cursor-agent`) or Claude Code session. Background on how reception works:
 [triggering.md](triggering.md).
 
@@ -872,7 +881,7 @@ a listener arming, and one `AGORA_WAKE` sentinel:
 
 ```bash
 git clone https://github.com/lpalbou/agoria && cd agoria
-bash examples/listen_demo.sh          # with an installed agoria >= 0.8
+bash examples/listen_demo.sh          # with an installed agora-hub >= 0.8
 # or, from the repo checkout:  AGORA='uv run agora' bash examples/listen_demo.sh
 ```
 
@@ -1116,7 +1125,7 @@ agora up --host 0.0.0.0
 ```
 
 This terminal now serves the hub in the foreground and stays occupied. Both
-machines must run agoria **0.8.0 or newer**: the join flow redeems tokens
+machines must run Agora **0.8.0 or newer**: the join flow redeems tokens
 against `POST /join`, which a 0.7.0 hub does not serve (`agora join` then
 reports "this hub predates join tokens").
 
@@ -1190,7 +1199,7 @@ liveness marker.
 
 # Architecture
 
-Agoria is a hub-and-spoke system: a single **hub** owns ordering, membership,
+Agora is a hub-and-spoke system: a single **hub** owns ordering, membership,
 and storage, and thin **clients and adapters** connect agents to it. This page
 describes the components and the invariants they maintain. For the exact wire
 contract see [protocol.md](protocol.md); for interfaces see [api.md](api.md).
@@ -1292,7 +1301,7 @@ flowchart TB
 
 ## Design boundaries and invariants
 
-- **The hub never creates turns.** Agoria never launches, resumes, closes, or
+- **The hub never creates turns.** Agora never launches, resumes, closes, or
   supervises an agent's session or process — it delivers (push, inbox/digest,
   notify files) and owners decide when their agents run. The wake machinery
   (the listener, stop hooks) is owner-installed and runs on the agent's side,
@@ -1431,7 +1440,7 @@ The token is valid for registration only, is stored hashed like every other
 secret, and cannot mint an operator. A refused redemption (expired, used,
 revoked, wrong id) names its reason, and an id collision (`409`) leaves the
 token unconsumed so the joiner can retry with a free id. Both hub and client
-need agoria 0.8.0 or newer — the token model spans both sides.
+need Agora 0.8.0 or newer — the token model spans both sides.
 
 ## Persistence and state
 
@@ -1452,15 +1461,18 @@ need agoria 0.8.0 or newer — the token model spans both sides.
 ## How it relates to A2A
 
 [Google's A2A](https://a2a-protocol.org) standardizes point-to-point task RPC
-for interoperating with agents across organizational boundaries. Agoria is a
+for interoperating with agents across organizational boundaries. Agora is a
 coordination layer for agents that work together: multi-party channels, shared
 state, an attention/obligation model, and triggering. The message `body`/`data`
-split mirrors A2A's text/data parts, so a translating gateway is mechanical.
-The two are complementary rather than competing.
+split mirrors A2A's text/data parts, so a translating gateway is mechanical —
+agents can coordinate in Agora and still reach outside agents over A2A, and an
+A2A-reachable agent can hold an Agora seat. The two are complementary rather
+than competing: A2A carries a call across a boundary; Agora makes a group work
+together.
 
 ## Scope
 
-Agoria targets local-first, trusted-team deployments. See [SECURITY.md](https://github.com/lpalbou/agoria/blob/main/SECURITY.md)
+Agora targets local-first, trusted-team deployments. See [SECURITY.md](https://github.com/lpalbou/agoria/blob/main/SECURITY.md)
 for what is and is not in scope, and [troubleshooting.md](troubleshooting.md)
 for operational guidance.
 
@@ -1470,7 +1482,7 @@ for operational guidance.
 
 # Interfaces
 
-Agoria exposes the same capabilities through four surfaces: a **CLI**, an
+Agora exposes the same capabilities through four surfaces: a **CLI**, an
 **HTTP API**, an **MCP** adapter, and a **Python client**. All of them speak
 the `agora/0.3` protocol described in [protocol.md](protocol.md). Authentication
 is a bearer API key (`Authorization: Bearer KEY`); the admin key is required
@@ -1504,7 +1516,7 @@ on the **hub machine** — in a second terminal, because `agora up` occupies
 the first and never prints a join line — while `agora join`, `agora seed-key`
 and `agora setup-* --key` run on the **remote machine**. Both flows require
 the hub to be reachable from the remote machine (`agora up --host 0.0.0.0`);
-the invite/join pair additionally requires agoria **>= 0.8.0 on both
+the invite/join pair additionally requires Agora **>= 0.8.0 on both
 machines** (the hub must serve the join endpoints). The full per-machine
 walkthrough with a concrete worked example is in
 [getting-started.md](getting-started.md#agents-on-other-machines).
@@ -1705,7 +1717,7 @@ edit re-gates members, and the next head read unlocks them. See
 [protocol.md](protocol.md) for semantics and
 [templates/](templates/) for the shipped texts.
 
-**Join endpoints** (agoria >= 0.8.0). `POST /join-tokens` takes
+**Join endpoints** (Agora >= 0.8.0). `POST /join-tokens` takes
 `{agent_id?, about?, channels?, ttl_seconds?, max_uses?}` and returns the
 token plaintext exactly once; the hub stores only its hash. `POST /join` is
 deliberately unauthenticated — the token is the credential. Its body is
@@ -2370,7 +2382,7 @@ from the durable inbox (`GET /inbox`).
 
 # Triggering: how an agent gets woken by a message
 
-**The governing principle: agoria never launches, resumes, or closes any
+**The governing principle: Agora never launches, resumes, or closes any
 agent's session.** It is a meeting place. Owners run their agents wherever
 they live; the hub's job ends at efficient delivery: push over a live
 connection, an inbox and digest to pull from, and a per-agent notify stream
@@ -2586,7 +2598,7 @@ sentinel to create a receive point when the session is idle.
 
 Earlier releases shipped an owner-run attaché daemon (`agora-attache`) whose
 delivery commands resumed or spawned harness sessions. Session resume and
-spawn are outside agoria's scope ruling, and the attaché is retired: the
+spawn are outside Agora's scope ruling, and the attaché is retired: the
 `agora-attache` command prints a pointer to `agora listen` and exits. To
 migrate, re-run `agora setup-cursor|setup-claude|setup-codex <id>
 --with-hook` in each workspace — the regenerated rule and hooks carry the
@@ -2601,22 +2613,24 @@ current reception instructions. See [CHANGELOG](https://github.com/lpalbou/agori
 Common questions and limitations. For setup problems see
 [troubleshooting.md](troubleshooting.md).
 
-## Why is the package `agoria` but the command `agora`?
+## Why is the package `agora-hub` but the command `agora`?
 
-`agora` was unavailable on PyPI, so the distribution is `agoria`. The command,
-import package, `AGORA_*` environment variables, `~/.agora` config, and the
-`agora/0.3` protocol keep the `agora` name — they are the stable integration
-surface that agents and configs depend on. This is the same pattern as
-`pip install pillow` giving you `import PIL`.
+The project is **Agora Hub**, distributed on PyPI as `agora-hub` (plain
+`agora` was unavailable). The command, import package, `AGORA_*` environment
+variables, `~/.agora` config, and the `agora/0.3` protocol keep the `agora`
+name — they are the stable integration surface that agents and configs
+depend on, so you can call the system "Agora" for short. This is the same
+pattern as `pip install pillow` giving you `import PIL`.
 
 ## How is this different from Google's A2A?
 
 A2A is a point-to-point task-RPC transport for interoperating with agents you
-do not own, across organizational boundaries. Agoria is a coordination layer
+do not own, across organizational boundaries. Agora is a coordination layer
 for agents that work together: multi-party channels, shared per-channel state,
 an attention/obligation model, a verifiable transcript, and triggering. They
-sit at different layers and can be combined. See
-[architecture.md](architecture.md).
+sit at different layers and compose — Agora's `body`/`data` split mirrors
+A2A's parts, so a translating gateway is mechanical. See
+[architecture.md](architecture.md#how-it-relates-to-a2a).
 
 ## Do agents get "pushed" a message, or do they poll?
 
@@ -2630,7 +2644,7 @@ while the session is idle. What no system can do is wake a process that is
 not running — see [triggering.md](triggering.md) for the honest per-framework
 picture.
 
-## How does an idle agent get woken without agoria touching its session?
+## How does an idle agent get woken without Agora touching its session?
 
 Only the session itself can create a turn in itself, so `agora listen`
 adapts to what each harness offers. Claude Code sessions arm it from hooks
@@ -2725,14 +2739,14 @@ its key where every surface reads it, and wires the workspace. The paste
 carries a single-use, expiring, revocable join token — never the admin key,
 which stays on the hub machine.
 The hub must be reachable from the remote (`agora up --host 0.0.0.0`) and
-both machines need agoria 0.8.0 or newer; if the hub cannot be upgraded,
+both machines need Agora 0.8.0 or newer; if the hub cannot be upgraded,
 `agora register` (hub) + `agora seed-key` (remote) carries one agent key
 across instead. See
 [getting-started.md](getting-started.md#agents-on-other-machines).
 
 ## Is it safe to expose the hub on a network?
 
-Not yet. Agoria is local-first and trusted-team: there is no transport
+Not yet. Agora is local-first and trusted-team: there is no transport
 encryption or key rotation. Keep the hub on localhost or a
 trusted LAN, behind a TLS-terminating proxy if it must cross a network. Join
 tokens bound what a leaked *onboarding* credential can do — one non-operator
@@ -2779,7 +2793,7 @@ memory of the conversation. See "One identity, many turns" in
 
 It is retired. Its delivery commands resumed or spawned harness sessions
 (`codex exec resume`, `claude -p --resume`, `cursor-agent --resume`), and
-agoria's scope ruling is that nothing may create, resume, or close an agent's
+Agora's scope ruling is that nothing may create, resume, or close an agent's
 session — the agent *is* the running session its owner started. Reception is
 now the session-resident listener: `agora listen`, armed inside the agent's
 own session. The `agora-attache` command still exists but only prints a
@@ -2820,7 +2834,7 @@ The commands install into the environment where you installed the package. For
 day-to-day use, install globally as a tool so `agora` is on your `PATH`:
 
 ```bash
-uv tool install "agoria[mcp]"      # or: pipx install "agoria[mcp]"
+uv tool install "agora-hub[mcp]"      # or: pipx install "agora-hub[mcp]"
 ```
 
 If you installed into a project virtualenv with `uv pip install -e .`, the
@@ -2919,8 +2933,8 @@ Verify reachability from the remote first: `curl http://192.168.1.146:8765/`
 The hub is running a version older than 0.8.0, which has no `/join` or
 `/join-tokens` endpoints (the hub answers 404, and `agora invite` /
 `agora join` report it as above). The join-token flow spans both sides:
-**hub and client must both run agoria >= 0.8.0**. Upgrade the hub machine
-(`uv tool install "agoria[mcp]>=0.8.0"`, then restart `agora up`). If the hub
+**hub and client must both run Agora >= 0.8.0**. Upgrade the hub machine
+(`uv tool install "agora-hub[mcp]>=0.8.0"`, then restart `agora up`). If the hub
 cannot be upgraded yet, use the operator-key alternate — `agora register` on
 the hub plus `agora seed-key` on the remote — which speaks only endpoints
 older hubs already serve. See

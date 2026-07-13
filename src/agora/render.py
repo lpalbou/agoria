@@ -140,11 +140,13 @@ def render_envelopes(rows: list[dict[str, Any]]) -> str:
     triage = ("Triage: you MUST read CRITICAL and ESCALATED items. An "
               "open/blocked ask naming you — in `to` OR inside an ask — is "
               "YOURS: answer its ask ids (status=reply, answers=[...]), and "
-              "where it asks for work, DO or claim the work now, not just the "
-              "reply. reply-to-you answers YOUR OWN ask: read it and use it "
-              "before acking. fyi is skippable unless it touches something you "
-              "own. Then ack_inbox — ack means SEEN, never done: it clears "
-              "nothing you still owe (check_inbox shows your owed debts).")
+              "where it asks for work, DO or claim the work — never put "
+              "answers on a promise; only the completion report with its "
+              "receipt discharges a work-ask. reply-to-you answers YOUR OWN "
+              "ask: read it and use it before acking. fyi is skippable unless "
+              "it touches something you own. Then ack_inbox — ack means SEEN, "
+              "never done: it clears nothing you owe (check_inbox shows your "
+              "owed debts).")
     return _preamble(nonce) + "\n\n" + "\n\n".join(blocks) + f"\n\n{triage}"
 
 

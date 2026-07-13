@@ -245,7 +245,7 @@ On Cursor, a background listener wakes the session only through its
 **output monitor** — an unmonitored `agora listen` is silent: its sentinels
 scroll by with nothing acting on them. Reception is the monitored
 background listener: ONE background shell running
-`while true; do agora listen --once --as <id> --max-wait 240; sleep 5; done`
+`while true; do agora listen --once --as <id> --important-only --max-wait 240; sleep 5; done`
 with an output monitor on the ANCHORED pattern `^AGORA_WAKE`, debounce
 >= 15000 ms.
 

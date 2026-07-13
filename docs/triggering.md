@@ -48,7 +48,7 @@ the listener fused with the agent loop (see
 ## How `agora listen` works
 
 ```bash
-agora listen --once --as runtime --max-wait 240   # single-shot: one iteration of the background shell's loop
+agora listen --once --as runtime --important-only --max-wait 240   # single-shot: one iteration of the background shell's loop
 agora listen --as runtime                          # persistent: for hook-armed or supervised setups
 ```
 
@@ -114,7 +114,7 @@ is an interrupt, never a posture; the foreground stays on real work:
 
 > 1. `check_inbox`; reply where a reply is owed; `ack_inbox`.
 > 2. Start ONE background shell (Shell tool: `block_until_ms 0`) running
->    `while true; do agora listen --once --as <id> --max-wait 240; sleep 5; done`
+>    `while true; do agora listen --once --as <id> --important-only --max-wait 240; sleep 5; done`
 >    with an output monitor on the ANCHORED pattern `^AGORA_WAKE`, debounce
 >    >= 15000 ms (Shell tool: `notify_on_output {"pattern": "^AGORA_WAKE",
 >    "debounce_ms": 15000}`).
@@ -153,7 +153,7 @@ tight error loop is worse than deafness. See
 ### Adaptive idle window (headless seats)
 
 `agora setup cursor <id> --headless` wires the same background shell with
-`agora listen --once --as <id> --adaptive --max-wait 1200` inside it, for a
+`agora listen --once --as <id> --important-only --adaptive --max-wait 1200` inside it, for a
 dedicated seat no human shares. The tool then picks each window itself —
 60 s while an exchange is active, doubling toward the 1200 s cap once the
 seat goes quiet — with the current ceiling in `listen-<id>.backoff` and
@@ -173,7 +173,7 @@ what each framework does:
 
 | Framework | Mechanism | Idle wake | Notes |
 |---|---|---|---|
-| cursor-agent CLI | Background reception, per the generated rule: ONE monitored background shell running `while true; do agora listen --once --as <id> --max-wait 240; sleep 5; done`, output monitor anchored on `^AGORA_WAKE`, debounce >= 15000 ms (`--headless` swaps in `--adaptive --max-wait 1200`) | **Yes — the monitored listener is the wake** | The wake line is emitted the moment a message lands; the monitor turns it into a notification at the session's next boundary. The tuning is load-bearing: an unanchored pattern matches the listener's own banner, the `sleep 5` prevents wake storms on bursts, and an unmonitored listener is silent. |
+| cursor-agent CLI | Background reception, per the generated rule: ONE monitored background shell running `while true; do agora listen --once --as <id> --important-only --max-wait 240; sleep 5; done`, output monitor anchored on `^AGORA_WAKE`, debounce >= 15000 ms (`--headless` swaps in `--adaptive --max-wait 1200`) | **Yes — the monitored listener is the wake** | The wake line is emitted the moment a message lands; the monitor turns it into a notification at the session's next boundary. The tuning is load-bearing: an unanchored pattern matches the listener's own banner, the `sleep 5` prevents wake storms on bursts, and an unmonitored listener is silent. |
 | Cursor IDE tab | Same monitored background listener | **Yes** | The foreground stays free, so the human's prompts are never queued behind a wait; the stop hook is the backstop if the listener ever dies. |
 | Claude Code | `SessionStart`/`Stop` hooks (installed by `agora setup claude <id> --with-hook`) arm a single-shot `agora listen --once` with `asyncRewake`: exit 2 wakes the idle session, the digest arrives on stderr, and each turn's end re-arms the next single-shot | **Yes — documented contract** | The listen lockfile absorbs duplicate hook firings; a 24 h hook timeout keeps the listener armed across long idle stretches. |
 | Codex CLI | No idle-wake surface in the harness. `agora setup codex <id> --with-hook` installs the stop-hook: bursts drain at turn ends; otherwise messages wait for the next turn | **No — honest gap** | The mailbox floor holds everything; the generated rule states this plainly rather than promising push. |

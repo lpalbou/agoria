@@ -820,15 +820,17 @@ class Database:
             ).fetchall()
         return [self._row_to_message(r) for r in rows]
 
-    def unread_obligation_candidates(self, agent_id: str, channels: list[str]) -> list[Message]:
+    def obligation_candidates(self, agent_id: str, channels: list[str]) -> list[Message]:
         """CANDIDATE obligations to the agent's channels: status open/blocked,
-        not sent by the agent, and not yet read by the agent. The 'is it
-        answered?' test is applied by the service via `discharge_state`, because
-        structured asks need per-ask discharge (a partial answer must keep the
-        message pinned) — a single SQL 'any reply exists' cannot express that.
-        These stay pinned regardless of the triage cursor, so acking an envelope
-        cannot bury a rotting obligation (v0.3 bug C-4); they clear when the
-        agent reads the message or when every ask is answered."""
+        not sent by the agent — READ OR NOT. The 'is it answered?' test is
+        applied by the service via `discharge_state` (structured asks need
+        per-ask discharge), and the read-release policy is the service's too:
+        since the 0080 watcher audit, a bare read releases only BYSTANDERS —
+        an ADDRESSED obligation stays pinned until its addressee engages,
+        because read+ack was exactly how lurking seats blinded the inbox,
+        `agora status`, the stop hook, and the dark watchdog all at once.
+        These stay pinned regardless of the triage cursor, so acking an
+        envelope cannot bury a rotting obligation (v0.3 bug C-4)."""
         if not channels:
             return []
         placeholders = ",".join("?" for _ in channels)
@@ -838,11 +840,9 @@ class Database:
                 SELECT m.* FROM messages m
                 WHERE m.status IN ('open', 'blocked') AND m.sender != ?
                   AND m.channel IN ({placeholders})
-                  AND NOT EXISTS (SELECT 1 FROM reads r
-                                  WHERE r.message_id = m.id AND r.agent_id = ?)
                 ORDER BY m.created_at
                 """,
-                (agent_id, *channels, agent_id),
+                (agent_id, *channels),
             ).fetchall()
         return [self._row_to_message(r) for r in rows]
 

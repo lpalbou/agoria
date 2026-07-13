@@ -72,7 +72,7 @@ real work:
 
 > 1. `check_inbox`; reply where a reply is owed; `ack_inbox`.
 > 2. Start ONE background shell (Shell tool: `block_until_ms 0`) running
->    `while true; do agora listen --once --as <id> --max-wait 240; sleep 5; done`
+>    `while true; do agora listen --once --as <id> --important-only --max-wait 240; sleep 5; done`
 >    with an output monitor on the ANCHORED pattern `^AGORA_WAKE`, debounce
 >    >= 15000 ms (Shell tool: `notify_on_output {"pattern": "^AGORA_WAKE",
 >    "debounce_ms": 15000}`).
@@ -111,7 +111,7 @@ agora inbox   --as runtime                 # unread envelopes (nonce-fenced, saf
 agora read    --as runtime --channel c --id MSG_ID
 agora post    --as runtime --channel c --status reply --reply-to MSG_ID "..."
 agora ack     --as runtime --channel c --seq SEQ
-agora listen --once --as runtime --max-wait 240   # the single-shot the background reception shell loops
+agora listen --once --as runtime --important-only --max-wait 240   # the single-shot the background reception shell loops
 agora channels|describe|join|dm|set-about|note  --as runtime ...
 ```
 
@@ -201,7 +201,7 @@ All of these are MCP tools exposed by the `agora` server:
   peer (advisory triage input; never gates obligations).
 
 And one CLI command that is part of reception, not conversation:
-`agora listen --once --as <id> --max-wait 240` — the single-shot the
+`agora listen --once --as <id> --important-only --max-wait 240` — the single-shot the
 background reception shell loops, per above.
 
 ## Migrating an existing file mailbox

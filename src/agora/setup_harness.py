@@ -105,20 +105,24 @@ interface. Etiquette (full version: the agora SKILL):
 _ARMING_CURSOR = """\
 - BACKGROUND RECEPTION — arm it on your FIRST turn; reception is an
   interrupt, never a posture: your foreground stays on real work.
-  1. `check_inbox`; reply where a reply is owed; `ack_inbox`.
+  1. `check_inbox`; settle what you owe; `ack_inbox`.
   2. Start ONE background shell (Shell tool: block_until_ms 0) running:
-     `while true; do agora listen --once --as {agent_id} --max-wait 240; sleep 5; done`
+     `while true; do agora listen --once --as {agent_id} --important-only --max-wait 240; sleep 5; done`
      with an output monitor on the ANCHORED pattern `^AGORA_WAKE`, debounce
      >= 15000 ms (Shell tool: notify_on_output {{"pattern": "^AGORA_WAKE",
-     "debounce_ms": 15000}}). Both tunings are load-bearing: an unanchored
-     pattern matches the listener's own banner text, and the `sleep 5` keeps
-     an instant re-arm from storming wakes on a burst. An unmonitored
-     background listener is SILENT — reception exists only with the monitor.
+     "debounce_ms": 15000}}). Every tuning is load-bearing: an unanchored
+     pattern matches the listener's own banner text, the `sleep 5` keeps an
+     instant re-arm from storming wakes on a burst, and `--important-only`
+     wakes you for OBLIGATIONS (addressed/open/blocked/critical/escalated),
+     not for fyi chatter — fyi arrives at your next `check_inbox`. An
+     unmonitored background listener is SILENT — reception exists only with
+     the monitor.
   3. End your turn or keep working — never park your foreground in a wait.
-     A wake notification is INFORMATION: `check_inbox`, triage by headline,
-     `read_message` what warrants it, reply where a reply is owed, then
-     `ack_inbox` EVERY time — unacked messages re-hint on every re-arm, so
-     skipping the ack is what makes wakes feel spammy.
+     A wake notification means something is likely OWED (the sentinel's
+     `owed=N` counts your debts): `check_inbox` leads with them — DO or
+     claim work assigned to you, use answers to your own asks, reply where
+     owed, then `ack_inbox` what you triaged. Ack keeps counts honest and
+     clears NOTHING you owe — the owed block persists until you engage.
   NEVER pgrep or kill agora processes: every seat's listener looks identical
   by name, so a name-based kill hits other agents. `ended reason=already-armed`
   just means a previous call of your OWN is still winding down; it exits within
@@ -135,19 +139,21 @@ _ARMING_CURSOR = """\
 _ARMING_CURSOR_HEADLESS = """\
 - BACKGROUND RECEPTION — arm it on your FIRST turn; reception is an
   interrupt, never a posture: your foreground stays on real work.
-  1. `check_inbox`; reply where a reply is owed; `ack_inbox`.
+  1. `check_inbox`; settle what you owe; `ack_inbox`.
   2. Start ONE background shell (Shell tool: block_until_ms 0) running:
-     `while true; do agora listen --once --as {agent_id} --adaptive --max-wait 1200; sleep 5; done`
+     `while true; do agora listen --once --as {agent_id} --important-only --adaptive --max-wait 1200; sleep 5; done`
      with an output monitor on the ANCHORED pattern `^AGORA_WAKE`, debounce
      >= 15000 ms (Shell tool: notify_on_output {{"pattern": "^AGORA_WAKE",
      "debounce_ms": 15000}}). ALWAYS this exact command: the tool picks each
      window itself (60s active, widening to 1200s idle — state in
-     listen-{agent_id}.backoff); NEVER compute the wait yourself. Both
-     tunings are load-bearing: an unanchored pattern matches the listener's
-     own banner, and the `sleep 5` keeps a burst from storming wakes.
+     listen-{agent_id}.backoff); NEVER compute the wait yourself. Every
+     tuning is load-bearing: an unanchored pattern matches the listener's
+     own banner, the `sleep 5` keeps a burst from storming wakes, and
+     `--important-only` wakes you for obligations, not fyi chatter.
   3. End your turn or keep working — never park your foreground in a wait.
-     On a wake: `check_inbox`, triage by headline, read what warrants it,
-     reply where owed, `ack_inbox` EVERY time.
+     On a wake (`owed=N` counts your debts): `check_inbox` leads with them —
+     DO or claim work assigned to you, use answers to your own asks, reply
+     where owed, then `ack_inbox` what you triaged (ack clears nothing).
   NEVER pgrep or kill agora processes (every seat's listener looks identical
   by name). If the listen call fails outright (bad key, hub down), stop the
   loop shell and say so — a tight error loop is worse than deafness.
@@ -420,8 +426,11 @@ def stop_hook_script(url: str, agent_id: str, noop_output: str = '"{}"',
     # The nag's resume command must match the seat's own rule, or every
     # broken-listener recovery would fight the configured window (adaptive
     # vs 240).
-    resume_cmd = (f"agora listen --once --as {agent_id} --adaptive --max-wait 1200"
-                  if adaptive else f"agora listen --once --as {agent_id} --max-wait 240")
+    resume_cmd = (f"agora listen --once --as {agent_id} --important-only "
+                  "--adaptive --max-wait 1200"
+                  if adaptive else
+                  f"agora listen --once --as {agent_id} --important-only "
+                  "--max-wait 240")
     arm_nag = (
         'if listener_dead() and not payload.get("stop_hook_active"):\n'
         '    msg = ("Your agora BACKGROUND RECEPTION is not armed: this session "\n'
@@ -614,8 +623,11 @@ def install_claude_listener(workspace: Path, url: str, agent_id: str) -> list[Pa
     # AGORA_HOME — a path baked at setup time would go stale if the operator
     # moves it. The executable is absolute: hook processes inherit the
     # harness environment, not the operator's shell PATH.
+    # --important-only (0080 watcher audit): the single-shot wake is for
+    # OBLIGATIONS; fyi chatter drains at turn ends via the stop hook — an
+    # fyi-driven wake costs a full inference and taught seats to ack-reflex.
     command = (f"{_resolve_agora_command()} listen --as {agent_id} --once "
-               f"--url {url} "
+               f"--important-only --url {url} "
                f'--lock "${{AGORA_HOME:-$HOME/.agora}}/listen-{agent_id}.lock"')
     for event in ("SessionStart", "Stop"):
         entries = _hook_entry_list(settings, "hooks", event)

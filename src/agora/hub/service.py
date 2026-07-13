@@ -953,13 +953,14 @@ class HubService:
         # them up.
         members_cache: dict[str, set[str]] = {}
         hub_blocked = {b["agent_id"] for b in self.db.blocks_active(self.HUB_SCOPE)}
-        for message in self.db.unread_obligation_candidates(agent.id, channels):
+        for message in self.db.obligation_candidates(agent.id, channels):
             # Effective addressees = message-level `to` plus every seat named
             # by a per-ask `to` (0077): a canvass that names you in an ask IS
             # addressed to you — names living only in prose pinned nobody.
             named = ask_addressees(message)
             addressed = set(message.to) | named
-            if addressed and agent.id not in addressed:
+            viewer_is_addressee = agent.id in addressed
+            if addressed and not viewer_is_addressee:
                 # Addressee-left fallback (review MED-3): if NO addressee is
                 # still AVAILABLE, the obligation would become invisible to
                 # everyone — revert to broadcast pinning so it cannot rot in
@@ -972,16 +973,29 @@ class HubService:
                 available = members_cache[message.channel] - hub_blocked
                 if any(a in available for a in addressed):
                     continue
-            ds = discharge_state(message, self.db.replies_to(message.id),
-                                 self.operator_ids())
+            if not viewer_is_addressee and self.db.has_read(message.id, agent.id):
+                # Bystander economics (unchanged): for broadcast obligations —
+                # and the fallback case above — a bare read IS the triage; a
+                # bystander should not stay pinned to every open question.
+                continue
+            replies = self.db.replies_to(message.id)
+            ds = discharge_state(message, replies, self.operator_ids())
             if ds.closed:
                 continue
-            if (agent.id in named and agent.id not in message.to
-                    and agent.id not in pending_addressees(message, ds.pending)):
-                # Ask-scoped pin (0077): a seat named ONLY by asks stops being
-                # pinned once every ask naming it is answered — its canvass
-                # row is done even while other seats' rows stay open.
-                continue
+            if viewer_is_addressee:
+                # The 0080 root fix: an ADDRESSEE's bare read does NOT unpin —
+                # read+ack was exactly how lurking seats silenced the inbox,
+                # status, the stop hook, and the dark watchdog in one motion.
+                # Only engaging clears: any reply of theirs (answer, decline
+                # on the record) or thread closure.
+                if any(r.sender == agent.id for r in replies):
+                    continue
+                if (agent.id in named and agent.id not in message.to
+                        and agent.id not in pending_addressees(message, ds.pending)):
+                    # Ask-scoped pin (0077): a seat named ONLY by asks stops
+                    # being pinned once every ask naming it is answered — its
+                    # canvass row is done even while other rows stay open.
+                    continue
             by_id[message.id] = message
         # channel_sla is one store read per channel; cache it across the sweep
         # instead of per message (v0.3 perf finding H3).

@@ -143,7 +143,7 @@ the hub already writes (`~/.agora/<agent>-inbox.log` — no watcher process,
 no credentials); anywhere else it subscribes over the WebSocket:
 
 ```bash
-agora listen --once --as runtime --max-wait 240   # one iteration of Cursor's background reception shell
+agora listen --once --as runtime --important-only --max-wait 240   # one iteration of Cursor's background reception shell
 agora listen --as runtime --source ws             # remote machine (AGORA_URL set)
 ```
 

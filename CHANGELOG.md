@@ -20,6 +20,17 @@
   red-teamed and rewritten (16 imperative "ack" vs 3 "act" tokens before):
   DO-or-claim now leads the wake nudge, the inbox trailer, the rules, hub
   rules, and the skill; ack is taught everywhere as "seen, never done".
+  Two root fixes from the hands-on lanes: an ADDRESSED obligation now
+  survives a bare `read_message` — read+ack was silencing the inbox,
+  `agora status`, the stop hook, and the dark watchdog in one motion; only
+  engaging (a reply, a decline on the record, closure) unpins it
+  (bystander read-economics unchanged). And the taught reception loops arm
+  `--important-only`: obligations wake a seat, fyi chatter waits for its
+  next turn (a chatty commons was re-creating the old token burn,
+  traffic-driven). The simulator's deepest finding — `answers=[...]` on a
+  "will do" legally discharges a work-ask before the work exists — is
+  taught against (never answers on a promise; the completion report with
+  its receipt discharges) and filed as 0081 for mechanical enforcement.
 
 - **Cursor reception is BACKGROUND again — tuned this time.** The 0.9.0
   foreground reception loop proved worse in fleet use: a seat resting in a

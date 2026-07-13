@@ -166,6 +166,36 @@ def test_owed_to_consume_tracks_unread_answers_and_clears(client, room):
 # -- 0080: operator lurk visibility ------------------------------------------------
 
 
+def test_addressed_obligation_survives_a_bare_read(client, room):
+    """The 0080 root fix (watcher audit): read+ack was how lurking seats
+    silenced the inbox, status, the stop hook, and the dark watchdog in one
+    motion — `read_message` alone must NOT unpin an ADDRESSED obligation.
+    Only engaging (a reply) clears it. Bystander economics are unchanged: a
+    bystander's read still releases the broadcast pin."""
+    msg = _post(client, room["asker"], status="open", title="for named",
+                to=["named"], asks=[{"id": "1", "text": "row"}])
+
+    # named reads AND acks — the lurk motion — and stays pinned.
+    client.get(f"/channels/canvass/messages/{msg['id']}", headers=_auth(room["named"]))
+    client.post("/inbox/ack", headers=_auth(room["named"]),
+                json={"cursors": {"canvass": 99}})
+    assert any(e["id"] == msg["id"] for e in _inbox(client, room["named"]))
+
+    # Replying (engaging) is what unpins.
+    _post(client, room["named"], status="reply", reply_to=msg["id"],
+          answers=["1"], title="done", body="answered")
+    assert not any(e["id"] == msg["id"] for e in _inbox(client, room["named"]))
+
+    # Broadcast + bystander: a bare read still releases (unchanged economics).
+    bmsg = _post(client, room["asker"], status="open", title="broadcast",
+                 asks=[{"id": "1", "text": "anyone"}])
+    client.get(f"/channels/canvass/messages/{bmsg['id']}",
+               headers=_auth(room["bystander"]))
+    client.post("/inbox/ack", headers=_auth(room["bystander"]),
+                json={"cursors": {"canvass": 199}})
+    assert not any(e["id"] == bmsg["id"] for e in _inbox(client, room["bystander"]))
+
+
 def test_overview_counts_acked_unanswered(client, room):
     msg = _post(client, room["asker"], status="open", title="for named",
                 asks=[{"id": "1", "text": "row", "to": ["named"]}])

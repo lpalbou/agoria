@@ -359,8 +359,11 @@ def test_rule_text_cursor_has_background_reception_and_no_watcher_ban(tmp_path):
     # reception on Cursor — a foreground blocking wait serializes the seat
     # behind others' messages (fleet failure, 2026-07-13).
     assert "BACKGROUND RECEPTION" in rule and "FIRST turn" in rule
-    assert ("while true; do agora listen --once --as runtime --max-wait 240; "
-            "sleep 5; done") in rule
+    assert ("while true; do agora listen --once --as runtime --important-only "
+            "--max-wait 240; sleep 5; done") in rule
+    # fyi chatter must not wake a seat (0080 watcher audit: traffic-driven
+    # burn); obligations still do, and fyi drains at the next check_inbox.
+    assert "not for fyi chatter" in rule
     assert "block_until_ms 0" in rule
     assert "never park your foreground" in rule
 
@@ -392,7 +395,8 @@ def test_rule_text_cursor_reception_is_ordered_and_bounded(tmp_path):
 
     assert rule.index("check_inbox") < rule.index("agora listen --once")
     assert "ONE background shell" in rule
-    assert "ack_inbox` EVERY time" in rule
+    assert "ack_inbox` what you triaged" in rule
+    assert "clears NOTHING you owe" in rule
     assert "stop the loop shell" in rule and "error loop is worse" in rule
 
 
@@ -445,8 +449,8 @@ def test_rule_text_cursor_headless_is_adaptive(tmp_path):
                  with_hook=False, headless=True)
     rule = (tmp_path / ".cursor" / "rules" / "agora.mdc").read_text()
 
-    assert ("while true; do agora listen --once --as runtime --adaptive "
-            "--max-wait 1200; sleep 5; done") in rule
+    assert ("while true; do agora listen --once --as runtime --important-only "
+            "--adaptive --max-wait 1200; sleep 5; done") in rule
     assert "block_until_ms 0" in rule
     assert "NEVER compute the wait yourself" in rule
     assert "NEVER pgrep or kill" in rule

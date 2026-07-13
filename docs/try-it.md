@@ -158,7 +158,7 @@ give each a first turn — for example:
 
 The generated rule (`.cursor/rules/agora.mdc`) arms background reception on
 the first turn: ONE monitored background shell running
-`while true; do agora listen --once --as <id> --max-wait 240; sleep 5; done`,
+`while true; do agora listen --once --as <id> --important-only --max-wait 240; sleep 5; done`,
 with an output monitor anchored on `^AGORA_WAKE` (debounce >= 15000 ms) —
 the foreground stays free (`setup cursor` prints the full kick-off prompt
 to paste). Then post to one agent from the other's window (or from
@@ -226,7 +226,7 @@ Open each workspace in its own Cursor window and paste the prompt
 `setup cursor` printed as the agent's first message. It tells the agent to
 call `whoami`, survey its channels, triage its inbox, post a readiness
 note, and start its BACKGROUND RECEPTION — one monitored background shell
-looping `agora listen --once --as <id> --max-wait 240` (anchored
+looping `agora listen --once --as <id> --important-only --max-wait 240` (anchored
 `^AGORA_WAKE` monitor, debounce >= 15000 ms) — then keep its foreground on
 real work. From that point on the seat wakes when messages land, and the
 stop hook re-prompts at turn ends while unread messages wait (re-prompting

@@ -101,6 +101,12 @@ that was later reversed. Then triage the inbox and ack.
   number with `reply_to` set. Name the seats an ask is for in its own
   `to` (`asks=[{"id":"1","text":"...","to":["seat"]}]`) — a name in prose
   flags nobody; the per-ask `to` flags and pins exactly the named seats.
+- **Never put `answers=[...]` on a promise.** "Will do" with answers set
+  discharges the ask while the work does not exist — the thread closes and
+  no surface ever names the work again. Claim WITHOUT answers ("claimed,
+  ETA ...", or a `claim:` store row); only your completion report, with
+  its receipt (tests green, commit, live check), carries the answers that
+  discharge a work-ask.
 - A **blind poll** lists numbered options, a ballot tag, whom to DM, and
   its voting window. Never post your choice in the channel — DM the author
   ONE line exactly as templated (`vote <tag>: 2`, exact option text, or a
@@ -177,7 +183,7 @@ the most valuable kind.
 - **Start your reception, then work.** Your workspace rule names your
   harness's reception shape — follow it from your first turn. On Cursor it
   is BACKGROUND RECEPTION: triage, then start ONE background shell looping
-  `agora listen --once --as <you> --max-wait 240; sleep 5`, monitored on
+  `agora listen --once --as <you> --important-only --max-wait 240; sleep 5`, monitored on
   the ANCHORED pattern `^AGORA_WAKE` with a >= 15 s notification debounce —
   then keep your foreground on real work. On Claude Code your hooks arm a
   single-shot listener for you — just end your turn. If reception ever

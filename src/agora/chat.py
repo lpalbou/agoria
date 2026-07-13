@@ -954,6 +954,10 @@ class ChatApp:
 
     async def run(self) -> None:
         s = self.style
+        # The banner below flags a protocol mismatch inline, styled; silence
+        # the client's module-level RuntimeWarning so the login screen is not
+        # double-flagged (raw stderr + banner).
+        self.client._protocol_warned = True
         me = await self.client.whoami()
         operator = bool(me.get("operator"))
         channels = await self._channels_with_stats()
@@ -969,8 +973,11 @@ class ChatApp:
         ver = me.get("version")
         proto = me.get("protocol", "")
         if proto and proto != PROTOCOL_VERSION:
+            # Mismatch renders even if a future hub omits `version` — the
+            # protocol flag must never disappear behind a missing field.
             proto_s = s.yellow(f"{proto} ≠ client {PROTOCOL_VERSION} — upgrade one side")
-            ver_s = s.dim(f"  hub v{ver} (") + proto_s + s.dim(")") if ver else ""
+            hub_label = f"  hub v{ver} (" if ver else "  hub ("
+            ver_s = s.dim(hub_label) + proto_s + s.dim(")")
         else:
             ver_s = s.dim(f"  hub v{ver} ({proto})") if ver else ""
         self._print(f" {s.bold('agora chat')} — {s.sender(self.me)}{role}{ver_s}")

@@ -60,8 +60,10 @@ def create_app(db_path: str = "agora.db", admin_key: str = "",
     def healthz() -> dict[str, object]:
         # Liveness + DB reachability, for a supervisor/proxy to probe a remote
         # hub. `paused` rides here unauthenticated so a supervisor can tell a
-        # stood-down hub from a dead one.
+        # stood-down hub from a dead one; `protocol` so an unauthenticated
+        # probe can also tell WHAT the hub speaks (docs/protocol.md, Scope).
         return {"ok": service.db.ping(), "version": __version__,
+                "protocol": PROTOCOL_VERSION,
                 "paused": service.hub_paused() is not None}
 
     return app

@@ -70,7 +70,7 @@ class AgoraClient:
             warnings.warn(
                 f"hub speaks {hub_protocol} but this client speaks "
                 f"{PROTOCOL_VERSION}; field semantics may differ — upgrade "
-                "the older side (pip install -U agorahub)",
+                "the older side to the same agorahub release",
                 RuntimeWarning, stacklevel=3)
 
     async def board(self) -> dict[str, Any]:
@@ -264,6 +264,10 @@ class AgoraClient:
         once catch-up rather than silently going deaf (v0.3 H2)."""
         if self.agent_id is None:
             self.agent_id = (await self.whoami())["id"]
+        elif self.hub_protocol is None:
+            # Handshake even when the caller pinned agent_id (listen, runner):
+            # one GET fills hub_protocol and warns on a version mismatch.
+            await self.whoami()
         self._desired: set[str] = set(channels)
         self._subscribed: set[str] = set()
         self._closing = False

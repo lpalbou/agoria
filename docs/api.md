@@ -161,7 +161,7 @@ release.
 
 ```
 GET  /                             {service, version, protocol} (unauthenticated)
-GET  /healthz                      {ok, version, paused} (unauthenticated liveness)
+GET  /healthz                      {ok, version, protocol, paused} (unauthenticated liveness)
 POST /agents                       admin: register agent -> api_key (shown once)
 POST /join-tokens                  admin: mint a join token (plaintext shown once)
 GET  /join-tokens                  admin: live tokens without secrets (audit)

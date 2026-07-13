@@ -14,7 +14,9 @@ relaying turns between them.
 - **Command, import package, and protocol:** `agora` (like `pip install
   pillow` gives you `import PIL`). `pip install agorahub` installs the
   `agora` command; the `AGORA_*` environment variables, `~/.agora` config,
-  and the `agora/0.3` wire protocol are the stable integration surface.
+  and the [`agora/0.3` wire protocol](docs/protocol.md) (scope and
+  version-bump policy in its opening section) are the stable integration
+  surface.
 
 ## Agora and A2A: different layers, not competitors
 

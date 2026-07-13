@@ -62,8 +62,13 @@ def _make_transcript(client: TestClient) -> tuple[str, dict]:
         "title": "unicode — émojis 🦉 and «quotes»",
         "body": "café \u00e9\u0301 mixed\nnewline", "status": "open",
         "to": ["bob"],
+        # Floats chosen to pin the repr behaviors protocol.md rule 2 calls
+        # out as diverging from ECMA-262: integral float (5.0 keeps .0),
+        # zero-padded exponents (1e-07, 1e+16), negative zero.
         "data": {"z_last": {"b": 2, "a": 1}, "pi": 3.141592653589793,
                  "neg": -0.5, "big": 1752430471.123456, "n": None,
+                 "integral": 5.0, "tiny": 1e-07, "huge": 1e+16,
+                 "negzero": -0.0,
                  "arr": [1, "two", {"y": 0, "x": 1}]},
     })
     assert first.status_code == 200
@@ -123,7 +128,56 @@ def test_verifier_head_mismatch_is_caught(client):
     forged["head"] = "0" * 64
     result = verify_ledger.verify(forged)
     assert result["ok"] is False and result["broken_at"] is None
-    assert result["head_ok"] is False
+    assert result["head_mismatch"] is True
+
+
+def test_unhashed_turn_after_a_hashed_one_is_tampering(client):
+    """Rule 3: legacy (hash: null) turns are legitimate only BEFORE the chain
+    starts. Un-hashing a tail turn must flag, not silently restart — and the
+    served head must stay the last HASHED turn's hash, so the hub and a
+    doc-faithful verifier agree on this scenario (spec review finding)."""
+    key, ledger = _make_transcript(client)
+    last = ledger["turns"][-1]
+
+    # Verifier side: null the tail hash in the served document.
+    doc = json.loads(json.dumps(ledger))
+    doc["turns"][-1]["hash"] = None
+    result = verify_ledger.verify(doc)
+    assert result["ok"] is False
+    assert result["broken_at"] == last["seq"]
+
+    # Hub side: same surgery in the database — verified must flip false and
+    # the served head must be the last hashed turn's hash, not "".
+    from agora.hub import http_api  # the service is on the app; reach its db
+    service = client.app.state.service
+    service.db._conn.execute("UPDATE messages SET hash = NULL WHERE channel = ?"
+                             " AND seq = ?", ("verbatim", last["seq"]))
+    service.db._conn.commit()
+    after = client.get("/channels/verbatim/ledger", headers=_auth(key)).json()
+    assert after["verified"] is False
+    assert after["broken_at"] == last["seq"]
+    assert after["head"] == ledger["turns"][-2]["hash"]  # last still-hashed turn
+
+
+def test_non_finite_data_is_refused_at_post(client):
+    """NaN/Infinity would hash and store but make the ledger unservable and
+    unparseable outside Python — the hub must refuse them with a teaching 400
+    (strict-JSON gate), keeping every stored transcript verifiable."""
+    key = _register(client, "carol")
+    client.post("/channels", headers=_auth(key), json={"name": "strict"})
+    # httpx refuses to ENCODE inf, but Python's stdlib json.dumps emits
+    # `Infinity` by default (allow_nan=True) — so a real client can and will
+    # produce this body. Send it raw, exactly as such a client would.
+    body = '{"title": "bad", "body": "x", "status": "fyi", "data": {"x": Infinity}}'
+    r = client.post("/channels/strict/messages",
+                    headers={**_auth(key), "Content-Type": "application/json"},
+                    content=body)
+    assert r.status_code == 400
+    assert "NaN/Infinity" in r.json()["detail"]
+    # The channel stays healthy and verifiable after the refusal.
+    led = client.get("/channels/strict/ledger", headers=_auth(key)).json()
+    assert led["verified"] is True
+    assert verify_ledger.verify(led)["ok"] is True
 
 
 def test_verifier_cli_exit_codes(client, tmp_path, capsys):

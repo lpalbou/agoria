@@ -607,8 +607,18 @@ class HubService:
             if parent is None or parent.channel != channel:
                 raise HubError(400, "reply_to must reference a message in this channel")
         data = self._prepare_structured(payload, sender=agent.id, channel=channel)
-        if data is not None and len(json.dumps(data).encode()) > MAX_DATA_BYTES:
-            raise HubError(413, f"data exceeds {MAX_DATA_BYTES} bytes")
+        if data is not None:
+            try:
+                # allow_nan=False doubles as the strict-JSON gate: NaN/Infinity
+                # would hash and store fine but make the ledger response
+                # unserializable (and unparseable outside Python) — refuse at
+                # the boundary instead of poisoning the transcript.
+                encoded = json.dumps(data, allow_nan=False).encode()
+            except ValueError:
+                raise HubError(400, "data must be strict JSON: NaN/Infinity "
+                                    "are not representable — send null or a string")
+            if len(encoded) > MAX_DATA_BYTES:
+                raise HubError(413, f"data exceeds {MAX_DATA_BYTES} bytes")
         # `to` may only address members of this channel (addressing is a
         # delivery/importance signal; it should not name outsiders).
         if payload.to:

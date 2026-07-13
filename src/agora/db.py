@@ -608,9 +608,14 @@ class Database:
     @staticmethod
     def _ledger_payload(**f: Any) -> str:
         """Canonical, order-stable serialization of a message's immutable fields
-        for the hash chain. Deterministic (sorted keys, compact) so any party can
-        recompute it from the transcript and verify the chain independently."""
-        return json.dumps(f, sort_keys=True, separators=(",", ":"), default=str)
+        for the hash chain — the byte-exact definition lives in docs/protocol.md
+        ("Canonicalization"). Deterministic (sorted keys, compact, ASCII-only)
+        so any party can recompute it from the served transcript. allow_nan
+        fails loudly on non-finite floats: they are refused at the post
+        boundary, and a value that cannot round-trip as strict JSON must never
+        enter the chain (it would hash here but break every consumer)."""
+        return json.dumps(f, sort_keys=True, separators=(",", ":"),
+                          allow_nan=False)
 
     @classmethod
     def _ledger_hash(cls, prev_hash: str, *, id: str, channel: str, seq: int, sender: str,
@@ -691,8 +696,12 @@ class Database:
                 "data": json.loads(r["data"]) if r["data"] else None,
                 "reply_to": r["reply_to"], "created_at": r["created_at"], "hash": r["hash"],
             })
-        head = entries[-1]["hash"] if entries else ""
-        return entries, (head or "")
+        # The head is the last HASHED turn's hash (protocol.md rule 4) — not
+        # the last row's. They differ only when a trailing row has been
+        # un-hashed by direct DB tampering; serving "" there would make the
+        # hub disagree with a doc-faithful external verifier.
+        head = next((e["hash"] for e in reversed(entries) if e["hash"]), "")
+        return entries, head
 
     def verify_channel(self, channel: str) -> dict[str, Any]:
         """Recompute the hash chain from the stored transcript and confirm it is
@@ -708,7 +717,14 @@ class Database:
         broken_at: int | None = None
         head = ""
         for r in rows:
-            if r["hash"] is None:  # legacy pre-ledger row: chain starts after it
+            if r["hash"] is None:
+                # Legacy pre-ledger rows precede the first hashed turn (every
+                # insert hashes, and seq is append-only, so the hub can never
+                # interleave them). An unhashed row AFTER a hashed one is
+                # therefore evidence of direct DB tampering — flag it instead
+                # of silently restarting the chain (spec review, 0.9.0).
+                if chained and broken_at is None:
+                    broken_at = r["seq"]
                 prev_hash = ""
                 continue
             m = self._row_to_message(r)

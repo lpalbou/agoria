@@ -171,7 +171,11 @@ def test_root_and_healthz_report_the_package_version(client):
     root = client.get("/").json()
     assert root == {"service": "agora", "version": __version__,
                     "protocol": PROTOCOL_VERSION}
-    assert client.get("/healthz").json()["version"] == __version__
+    healthz = client.get("/healthz").json()
+    assert healthz["version"] == __version__
+    # protocol.md's Scope section promises the protocol string on every
+    # unauthenticated discovery surface — healthz included (0.9.0 review).
+    assert healthz["protocol"] == PROTOCOL_VERSION
 
 
 def test_websocket_auth_via_header(client):

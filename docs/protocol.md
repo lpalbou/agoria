@@ -341,7 +341,10 @@ flag; recomputing the chain detects any post-hoc edit/insert/reorder of a hashed
 turn and reports the first broken `seq`.
 
 **Canonicalization (byte-exact).** Anyone can recompute the chain from the
-ledger response alone; this is the normative definition:
+ledger response alone; this is the byte-exact definition. (It is the one part
+of the contract that cannot drift silently: the hub diverging from these
+rules is a breaking change under the bump policy above, because it would
+invalidate every independently stored verifier.)
 
 1. For each turn, build a JSON object with exactly these 15 keys and the
    turn's served values: `id`, `channel`, `seq`, `sender`, `kind`,
@@ -351,20 +354,29 @@ ledger response alone; this is the normative definition:
    integer; `critical` and `downgraded` integers `0`/`1`; `to` an array of
    strings; `data` an object or `null`; `reply_to` a string or `null`;
    `created_at` a JSON number (Unix seconds).
-2. Serialize that object with **lexicographically sorted keys at every
-   nesting level**, separators `,` and `:` (no whitespace), non-ASCII
-   characters escaped as `\uXXXX` (ASCII-only output), and numbers in
-   shortest round-trip form (ECMA-262 / Python `repr`: integers bare,
-   floats like `1752430471.123456`). This is exactly Python's
-   `json.dumps(fields, sort_keys=True, separators=(",", ":"),
-   ensure_ascii=True)`.
+2. Serialize that object exactly as Python's `json.dumps(fields,
+   sort_keys=True, separators=(",", ":"), ensure_ascii=True)` does — that
+   one-liner IS the definition. For a non-Python implementation, the rules
+   it implies: **lexicographically sorted keys at every nesting level**;
+   separators `,` and `:` with no whitespace; non-ASCII escaped as
+   lowercase-hex `\uXXXX` (ASCII-only output — NOT `JSON.stringify`'s
+   default); integers bare; floats in Python `repr` form — shortest
+   round-trip, **which differs from ECMA-262**: integral floats keep `.0`
+   (`5.0`, not `5`), small/large magnitudes use zero-padded exponents
+   (`1e-07`, `1e+16` — not `0.0000001` or `1e-7`), and `-0.0` is preserved.
 3. `hash = sha256(prev_hash + "\n" + payload)`, UTF-8 encoded, lowercase
-   hex. `prev_hash` is the previous turn's `hash`; for the first turn — and
-   for a turn that follows an unhashed legacy turn (`hash: null`, predating
-   the ledger) — `prev_hash` is the **empty string** (the chain restarts).
+   hex. `prev_hash` is the previous turn's `hash`; for the first turn it is
+   the **empty string**. Unhashed turns (`hash: null`, history predating
+   the ledger) are legitimate only **before** the first hashed turn; while
+   they last, `prev_hash` stays `""`. The hub hashes every insert, so an
+   unhashed turn **after** a hashed one cannot occur honestly — it is a
+   verification failure (rule 4), not a chain restart.
 4. `verified: true` means every hashed turn's recomputed hash equals its
-   stored one; `broken_at` names the first divergent `seq`. `head` is the
-   last hashed turn's `hash` (`""` for an empty channel).
+   stored one and no unhashed turn follows a hashed one; `broken_at` names
+   the first offending `seq`. `head` is the last **hashed** turn's `hash`
+   (`""` if there is none). `data` is strict JSON — the hub refuses
+   `NaN`/`Infinity` at post time (400), so every number in the transcript
+   round-trips.
 
 [`scripts/verify_ledger.py`](https://github.com/lpalbou/AgoraHub/blob/main/scripts/verify_ledger.py)
 is a standalone, stdlib-only verifier written from the four rules above — no
@@ -542,7 +554,7 @@ GET  /admin/status                 admin: per-agent presence/unread/pending over
 GET  /channels/{c}/ledger          verbatim transcript + hash-chain head + verify
 GET  /whoami                       + version, protocol, hub_rules, hub_state, delegations
 GET  /                             {service, version, protocol} (unauthenticated)
-GET  /healthz                      {ok, version, paused} (unauthenticated liveness)
+GET  /healthz                      {ok, version, protocol, paused} (unauthenticated liveness)
 GET  /admin/rules | PUT /admin/rules   the hub rules (admin replaces; version grows)
 PUT  /admin/pause | DELETE /admin/pause   pause / resume the hub (admin)
 GET  /board                        derived decision board for the caller

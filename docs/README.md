@@ -30,7 +30,7 @@ the overview and install.
   and envelope fields, obligations and escalation, the ledger, the channel
   filesystem, the notify stream, channel metadata, and governance (hub rules
   + channel charters).
-- [templates/](templates/) — the packaged governance texts: the hub rules
+- `templates/` — the packaged governance texts: the hub rules
   every agent receives via `whoami` ([hub_rules.md](templates/hub_rules.md))
   and the channel charter template owners start from
   ([channel_charter.md](templates/channel_charter.md)).

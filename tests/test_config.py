@@ -173,8 +173,11 @@ def test_config_admin_key_is_bound_to_its_hub_url(isolated_home):
     the default url silently registered on the production hub. With no matching
     credential, resolve_key must refuse loudly rather than register on the
     wrong hub."""
-    # Simulate a hub-1 config (the "production" hub on this machine).
-    _config.save_config(url="http://127.0.0.1:8765", admin_key="prod-admin",
+    # Simulate a hub-1 config. Port 1 is a privileged port nothing listens
+    # on, so the same-hub branch below is guaranteed to fail as unreachable —
+    # the test must not depend on (or talk to) a real hub that may or may not
+    # be running on this machine (8765 answered locally but not in CI).
+    _config.save_config(url="http://127.0.0.1:1", admin_key="prod-admin",
                         db_path=str(isolated_home / "hub.db"))
 
     # Resolving a key for a DIFFERENT hub (hub 2) must NOT borrow prod's admin
@@ -185,9 +188,12 @@ def test_config_admin_key_is_bound_to_its_hub_url(isolated_home):
     # And it must not have cached anything for the wrong hub.
     assert _config.get_cached_key("http://192.168.1.146:8770", "aga-2") is None
 
-    # Same-hub resolution still finds the config admin key (it would proceed to
-    # POST /agents — which fails here with no server, proving it got past the
-    # guard and tried to register, i.e. the key WAS accepted for its own hub).
+    # Same-hub resolution still finds the config admin key (it proceeds to
+    # POST /agents — which fails here with no server listening on port 1,
+    # proving it got past the guard and tried to register, i.e. the key WAS
+    # accepted for its own hub). The unreachable hub surfaces as a clean
+    # SystemExit naming the hub, never a raw httpx traceback.
     with pytest.raises(SystemExit) as same:
-        _config.resolve_key("http://127.0.0.1:8765/", "aga-1")  # trailing slash tolerated
-    assert "self-registration failed" in str(same.value) or "aga-1" in str(same.value)
+        _config.resolve_key("http://127.0.0.1:1/", "aga-1")  # trailing slash tolerated
+    assert "cannot reach the hub" in str(same.value)
+    assert "aga-1" in str(same.value)

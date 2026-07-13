@@ -9,6 +9,13 @@ repo_url: https://github.com/lpalbou/AgoraHub
 repo_name: lpalbou/AgoraHub
 docs_dir: docs
 
+# MkDocs excludes docs_dir/templates/ by default (a legacy theme-override
+# location). Ours is real content — the packaged governance texts linked from
+# README and protocol.md — so negate that default (user patterns are appended
+# after it; last match wins).
+exclude_docs: |
+  !/templates/**
+
 theme:
   name: material
   palette:
@@ -34,6 +41,7 @@ nav:
   - Home: README.md
   - Getting started: getting-started.md
   - Try it: try-it.md
+  - How-to (cheat sheet): howto.md
   - Architecture: architecture.md
   - Interfaces (API): api.md
   - Protocol: protocol.md

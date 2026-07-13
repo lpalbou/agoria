@@ -156,9 +156,17 @@ def resolve_key(url: str, agent_id: str, *, admin_key: str | None = None,
             f"{agent_id}` and import the key here with `agora seed-key "
             f"{agent_id} --url {url} --key <agora_...>`. Exporting "
             "AGORA_ADMIN_KEY also works but grants more than needed.")
-    r = httpx.post(f"{url.rstrip('/')}/agents",
-                   headers={"Authorization": f"Bearer {admin_key}"},
-                   json={"id": agent_id, "about": about}, timeout=10.0)
+    try:
+        r = httpx.post(f"{url.rstrip('/')}/agents",
+                       headers={"Authorization": f"Bearer {admin_key}"},
+                       json={"id": agent_id, "about": about}, timeout=10.0)
+    except httpx.HTTPError as exc:
+        # The hub named by the resolved url is unreachable (down, wrong host,
+        # no route). Fail with the cause instead of a raw httpx traceback —
+        # the caller asked to register '<agent_id>' and deserves to know the
+        # hub could not be reached.
+        raise SystemExit(f"cannot reach the hub at {url} to register "
+                         f"'{agent_id}': {exc}") from exc
     if r.status_code == 200:
         key = r.json()["api_key"]
         cache_key(url, agent_id, key)

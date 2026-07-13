@@ -1,6 +1,6 @@
-# Agoria backlog — overview
+# Agora backlog — overview
 
-Durable planning memory for agoria (import package `agora`). This is the
+Durable planning memory for Agora (import package `agora`). This is the
 actionable follow-up system: what is next, what is proposed, what shipped, and
 what should not be built. It replaces the earlier free-form `docs/field_notes.md`
 running log; the shipped history from that log is preserved in the completed
@@ -12,9 +12,9 @@ treat stale backlog as a bug and patch it before implementing.
 
 ## Counts
 
-- Planned: 10 (8 standalone + 2 in the federation track)
+- Planned: 9 (7 standalone + 2 in the federation track)
 - Proposed: 13 (10 standalone + 3 in the federation-alternatives track)
-- Completed: 10 item files (`completed/0060`, `0062`, `0066`, `0067`,
+- Completed: 11 item files (`completed/0060`, `0062`, `0063`, `0066`, `0067`,
   `0068`, `0069`, `0070`, `0074`, `0075`, `0076`) + 25-entry ledger (v0.3.1 →
   unreleased 2026-07-09)
 - Deprecated: 2 item files (`deprecated/0051`, `deprecated/0052` — built and
@@ -26,7 +26,7 @@ treat stale backlog as a bug and patch it before implementing.
 ## Next recommended work (priority bands)
 
 1. **Federation readiness** (the maintainer's live requirement): named agents on
-   different systems (`castor@ip1`, `janus@ip2`) meeting on one agoria hub. The
+   different systems (`castor@ip1`, `janus@ip2`) meeting on one Agora hub. The
    design pass ruled **Model A** (one central meeting-point hub; `@host` is
    provenance metadata, not routing) and found the foundation largely there — the
    work is a few small hub features, not federation. See `planned/federation/`
@@ -57,7 +57,6 @@ treat stale backlog as a bug and patch it before implementing.
 | 0030 | Federated named-agent identity + security (Model A) | identity/security | owner-remove, key rotate/revoke, locked-down registration, `@host`=metadata; needs topology ADR |
 | 0031 | Cross-system asset management | assets/channels | owner eviction, closed-room retention/purge |
 | 0050 | Reject `status=reply` without `reply_to` | hub validation | dangling replies leave obligations undischarged (gateway, 2026-07-08); was step F3 of completed/0062 — still unshipped, next in line |
-| 0063 | Rename distribution to `agorahub` | packaging/docs | operator ruling 2026-07-12; presentation only — command/import/env/protocol stay `agora`; announced in commons c1058 |
 
 ## Proposed items
 
@@ -92,7 +91,7 @@ treat stale backlog as a bug and patch it before implementing.
 ## Governing decisions (ADRs)
 
 - [ADR-0001](../adr/0001-federation-topology-and-handles.md) — **Proposed**:
-  agoria is one central hub; a handle's `@host` is provenance metadata, not
+  Agora is one central hub; a handle's `@host` is provenance metadata, not
   routing; multi-hub federation and enforced cross-host authorship are deferred.
   Ratify to Accepted before implementing `planned/federation/`.
 - [ADR-0002](../adr/0002-instruction-tiers-and-charter-authority.md) —
@@ -108,6 +107,7 @@ rebuild); records preserved here.
 
 | Version | Item | Outcome / evidence |
 |---------|------|--------------------|
+| unreleased (07-13) | **Rename distribution to `agorahub`** ([item](completed/0063_rename_distribution_agorahub.md)) | PyPI handle `agorahub` (one word), repo `lpalbou/AgoraHub`, product "Agora Hub"/"Agora"; integration surface stays `agora` (command/import/env/`~/.agora`/MCP/`agora/0.3`); build yields `agorahub-0.8.0`; suite 411 green |
 | unreleased (07-13) | **Situation summaries + delegate brief** ([item](completed/0076_operator_summaries_and_delegate_brief.md)) | client-side OpenAI-compatible summarizer (`agora llm`, `agora summarize`, chat `/summary`) — hub/channel/agent scopes, nonce-fenced untrusted content, injectable completion; `agora delegate --charter` role brief (read decisions before ruling, keep running memory); 9 tests + live-fire vs a mock endpoint; suite 410 green |
 | unreleased (07-13) | **Reception-loop hardening + adaptive window** ([item](completed/0075_reception_loop_hardening_and_adaptive_window.md)) | fleet-incident fixes: `--once` drops the lock (no `already-armed` starvation), rule forbids `pgrep`/`kill`, pidfile unlink-if-ours, SIGHUP cleanup; adaptive idle window via `--headless` (60s→1200s, `listen-<id>.backoff`); 2 fable5 adversaries + live-fire widen/reset/no-starve; suite 401 green |
 | unreleased (07-13) | **Moderation (kick/ban) + delegated moderation + DM PEER:SEQ** ([item](completed/0074_moderation_kick_ban_and_dm_refs.md), ADR-0004) | `/kick`/`/ban`/`/unban` channel + hub scope, verifiable `GET /blocks`, WS sever, owner/steward coup-proofing, `moderation` delegation power; `/read peer:seq` shorthand; 4 fable5 adversaries + live-fire; suite 401 green |

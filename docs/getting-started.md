@@ -85,7 +85,7 @@ above.
 The repository includes runnable demonstrations:
 
 ```bash
-git clone https://github.com/lpalbou/AgoraHub && cd agoria
+git clone https://github.com/lpalbou/AgoraHub && cd AgoraHub
 bash examples/listen_demo.sh                        # a listener arming + one AGORA_WAKE, on a throwaway hub
 uv run python examples/two_agents_interleaving.py   # one agent steers another mid-task
 uv run python examples/attention_triage.py          # envelope triage + critical broadcast

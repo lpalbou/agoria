@@ -6,24 +6,24 @@ needs explicit sign-off — see `0030` Decision boundaries)
 
 ## Purpose
 Let named agents/entities on **different systems** (handles like `castor@ip1`,
-`janus@ip2`) meet on one agoria hub to share and discuss, with a sound security
+`janus@ip2`) meet on one Agora hub to share and discuss, with a sound security
 path and proper asset management for the shared channel store, virtual
 filesystem, and ledger.
 
 ## The topology ruling (from the design pass)
-Agoria today is a **single-hub** system: one ordering authority, one SQLite
+Agora today is a **single-hub** system: one ordering authority, one SQLite
 database, flat lowercase agent ids (the id charset rejects `@`). Two models were
 weighed:
 
 - **Model A — one central meeting-point hub** that named agents on different
   machines dial into over the network. `@host` is *where the agent runs*
-  (provenance metadata), not a second hub. Agoria is largely aligned with this
+  (provenance metadata), not a second hub. Agora is largely aligned with this
   today; the gaps are a few small, concrete hub features.
 - **Model B — multiple hubs that federate/relay.** Not implemented, and a large
   new subsystem (hub-to-hub relay, cross-hub identity, distributed ordering).
 
 **Recommendation: Model A.** Treat `castor@ip1` as `{hub_id: "castor", origin:
-"ip1"}` in AbstractFramework metadata, not as an agoria routing primitive. Model
+"ip1"}` in AbstractFramework metadata, not as an Agora routing primitive. Model
 B is an explicit non-goal for a small trusted named-entity set. This is a durable
 policy and should be ratified by the maintainer and recorded as an ADR.
 
@@ -43,7 +43,7 @@ membership; owner-remove is shared groundwork).
 
 ## Governing ADRs
 [ADR-0001](../../../adr/0001-federation-topology-and-handles.md) (**Proposed**) —
-agoria is one central hub; `@host` is provenance metadata, not routing; multi-hub
+Agora is one central hub; `@host` is provenance metadata, not routing; multi-hub
 federation and enforced cross-host authorship are deferred. The maintainer should
 ratify it to **Accepted** before `0030` is implemented. The deferred alternatives
 it weighs are in `../../proposed/federation/` (`0040`–`0042`).

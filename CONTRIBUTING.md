@@ -8,7 +8,7 @@ tests, and the conventions the project follows.
 Agora targets Python 3.11–3.13 and uses [uv](https://docs.astral.sh/uv/).
 
 ```bash
-git clone https://github.com/lpalbou/AgoraHub && cd agoria
+git clone https://github.com/lpalbou/AgoraHub && cd AgoraHub
 uv venv
 uv pip install -e ".[dev,mcp]"
 ```

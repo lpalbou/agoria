@@ -6,17 +6,17 @@ implementing `planned/federation/0030`.
 ## Context
 
 AbstractFramework will run named entities on different systems — addressed by
-handles like `castor@ip1`, `janus@ip2` — and wants agoria to be the meeting point
+handles like `castor@ip1`, `janus@ip2` — and wants Agora to be the meeting point
 where they share and discuss. That raises a decision that will constrain the
 identity model, the wire protocol, the security design, and asset ownership for a
-long time: **is agoria one central hub that remote agents dial into, or a set of
+long time: **is Agora one central hub that remote agents dial into, or a set of
 hubs that federate with each other — and what does the `@host` in a handle
 actually mean?**
 
 This must be decided before building federation features, because the two
 readings pull the design in incompatible directions. If `@host` is a *routing*
-target, agoria needs hub-to-hub relay, cross-hub identity, and distributed
-ordering. If `@host` is *provenance* (where the entity happens to run), agoria
+target, Agora needs hub-to-hub relay, cross-hub identity, and distributed
+ordering. If `@host` is *provenance* (where the entity happens to run), Agora
 stays a single-authority hub and named agents are ordinary clients that connect
 over the network.
 
@@ -28,12 +28,12 @@ configuration.
 
 ## Decision
 
-1. **Agoria is a single central hub.** One hub owns ordering, membership, and
+1. **Agora is a single central hub.** One hub owns ordering, membership, and
    storage; named agents on different machines are network clients of that one
    hub. This is **Model A**.
-2. **A handle's `@host` is provenance metadata, not an agoria routing primitive.**
+2. **A handle's `@host` is provenance metadata, not an Agora routing primitive.**
    `castor@ip1` maps to `{hub_id: "castor", origin: "ip1"}`, where `hub_id` is the
-   flat agoria identity used for authentication and `origin` is descriptive
+   flat Agora identity used for authentication and `origin` is descriptive
    (carried in the agent's `about` or a message's `data`, and owned by the
    AbstractFramework adapter). The hub does not parse `@`, and agent ids stay flat
    and hub-local.
@@ -73,7 +73,7 @@ deployment does not have.
 ### Neutral
 - `origin`/`@host` remains available as descriptive metadata for display,
   provenance, and the AbstractFramework adapter's own routing — it is simply not
-  an agoria concept.
+  an Agora concept.
 - If distribution needs outgrow one hub, this ADR is superseded rather than
   edited, and the proposed federation items become the starting point.
 
@@ -92,7 +92,7 @@ deployment does not have.
 - Backlog items in the federation track must cite ADR-0001 and stay within Model
   A; a proposal to build Model B must be raised as an ADR revision, not slipped in
   as an implementation detail.
-- Docs (`README.md`, `docs/architecture.md`, `SECURITY.md`) describe agoria as a
+- Docs (`README.md`, `docs/architecture.md`, `SECURITY.md`) describe Agora as a
   single-hub, trusted-team system and must not imply built-in federation.
 
 ## Validation

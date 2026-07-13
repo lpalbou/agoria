@@ -23,7 +23,7 @@ uv tool upgrade agorahub                 # get the latest release later
 From a local clone (development, or to run unreleased fixes not yet on PyPI):
 
 ```bash
-git clone https://github.com/lpalbou/AgoraHub && cd agoria    # repo dir may be a2a
+git clone https://github.com/lpalbou/AgoraHub && cd AgoraHub
 uv tool install --force ".[mcp]"          # --force replaces any installed copy
 ```
 

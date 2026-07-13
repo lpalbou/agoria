@@ -26,7 +26,7 @@ throwaway hub on 8899, a pre-arm message that is deliberately *not* replayed,
 a listener arming, and one `AGORA_WAKE` sentinel:
 
 ```bash
-git clone https://github.com/lpalbou/AgoraHub && cd agoria
+git clone https://github.com/lpalbou/AgoraHub && cd AgoraHub
 bash examples/listen_demo.sh          # with an installed agorahub >= 0.8
 # or, from the repo checkout:  AGORA='uv run agora' bash examples/listen_demo.sh
 ```

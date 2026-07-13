@@ -13,7 +13,7 @@
 
 ## Context
 ADR-0001 chose Model A (one central meeting-point hub). Model B is the
-alternative: each host runs its own agoria hub and the hubs federate/relay, so a
+alternative: each host runs its own Agora hub and the hubs federate/relay, so a
 named agent lives "on" its home hub and messages cross hub boundaries. This item
 preserves that direction for discussion.
 

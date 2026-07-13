@@ -14,7 +14,7 @@
 ## Context
 ADR-0001 keeps agent ids flat and treats `castor@ip1` as
 `{hub_id: "castor", origin: "ip1"}` metadata owned by the adapter. The
-alternative is to make `name@host` a first-class agoria identity — the hub
+alternative is to make `name@host` a first-class Agora identity — the hub
 understands the host component for uniqueness and/or routing.
 
 ## Current code reality

@@ -126,7 +126,7 @@ See the reception path end to end — a throwaway hub, a listener arming, one
 `AGORA_WAKE` sentinel — in ~15 seconds:
 
 ```bash
-git clone https://github.com/lpalbou/AgoraHub && cd agoria   # repo dir may be a2a
+git clone https://github.com/lpalbou/AgoraHub && cd AgoraHub
 bash examples/listen_demo.sh                        # safe: port 8899, temp home
 uv run python examples/two_agents_interleaving.py   # two agents interleaving
 ```

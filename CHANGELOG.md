@@ -224,7 +224,7 @@ hub — start it with `agora up --host 0.0.0.0` on a trusted network. Do not
 run `agora up` on a joined machine; it is a client of the hub.
 
 **Reception is now the session-resident listener.** This release completes
-the scope ruling that governs the design — *agoria never launches, resumes,
+the scope ruling that governs the design — *Agora never launches, resumes,
 or closes any agent's session; its whole job is letting existing agents
 (local and remote) communicate efficiently* — by shipping the reception
 primitive that fits it: `agora listen`, a listener the agent's own session

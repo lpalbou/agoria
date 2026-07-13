@@ -15,7 +15,7 @@
 
 ## Context
 The maintainer's requirement: named entities on different systems (`castor@ip1`,
-`janus@ip2`) meet on one agoria hub to share and discuss. The design pass ruled
+`janus@ip2`) meet on one Agora hub to share and discuss. The design pass ruled
 **Model A** (one central meeting-point hub; `@host` is provenance metadata). The
 foundation is largely there; the gaps are small, concrete hub features plus an
 operator registration discipline.

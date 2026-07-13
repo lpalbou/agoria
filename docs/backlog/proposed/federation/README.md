@@ -14,7 +14,7 @@ implements one of them without revisiting the ADR.
 ## Items
 - `0040_multi_hub_federation.md`: Model B — multiple hubs that federate/relay.
   The alternative topology ADR-0001 rejects for now.
-- `0041_first_class_handles.md`: make `name@host` a first-class agoria identity
+- `0041_first_class_handles.md`: make `name@host` a first-class Agora identity
   (routing/uniqueness across hosts), the alternative to handle-as-metadata.
 - `0042_enforced_cross_host_authorship.md`: enforce `signature`/`verified_by` with
   per-agent keypairs so a handle cannot be impersonated — the mutually-untrusting

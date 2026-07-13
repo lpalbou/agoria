@@ -78,6 +78,11 @@ class AgoraClient:
         in-progress / pending-review / done), derived across its channels."""
         return self._json(await self._http.get("/board"))
 
+    async def owed(self) -> dict[str, Any]:
+        """The caller's outstanding debts: asks awaiting THEIR answer and
+        answers to their own asks awaiting consumption (anti-lurk, 0079)."""
+        return self._json(await self._http.get("/owed"))
+
     async def create_channel(self, name: str, private: bool = True) -> dict[str, Any]:
         return self._json(await self._http.post("/channels", json={"name": name, "private": private}))
 

@@ -63,6 +63,28 @@ def asks_of(message: Message) -> list[dict]:
     return [a for a in asks if isinstance(a, dict) and a.get("id") is not None]
 
 
+def ask_addressees(message: Message) -> set[str]:
+    """Every seat named by a per-ask `to` (0077). Naming a seat inside an ask
+    must flag that seat mechanically — the lurker incident's miss B was asks
+    naming seats only in prose, which flags nobody (70 occurrences in 48h)."""
+    out: set[str] = set()
+    for a in asks_of(message):
+        out.update(str(x) for x in (a.get("to") or []))
+    return out
+
+
+def pending_addressees(message: Message, pending: list[str]) -> set[str]:
+    """Seats named by an ask that is still UNANSWERED — the per-ask pin scope:
+    a seat whose canvass row was answered stops being pinned even while other
+    rows stay open."""
+    pend = set(pending)
+    out: set[str] = set()
+    for a in asks_of(message):
+        if str(a.get("id")) in pend:
+            out.update(str(x) for x in (a.get("to") or []))
+    return out
+
+
 def _answers_of(message: Message) -> list[str]:
     ans = (message.data or {}).get("answers")
     return [str(a) for a in ans] if isinstance(ans, list) else []
@@ -78,6 +100,15 @@ def _closes(parent: Message, reply: Message, operators: frozenset[str]) -> bool:
     if reply.sender == parent.sender or reply.sender in operators:
         return True
     return bool((reply.data or {}).get("settled_by"))
+
+
+def closed_authoritatively(parent: Message, replies: list[Message],
+                           operators: frozenset[str] = frozenset()) -> bool:
+    """True when someone with closure authority resolved the thread (ADR-0003)
+    — distinct from mere discharge: a fully-answered question whose asker
+    stays silent is discharged but NOT authoritatively closed, and that gap
+    is exactly where the asker's consumption debt (0078) lives."""
+    return any(_closes(parent, r, operators) for r in replies)
 
 
 def discharge_state(parent: Message, replies: list[Message],

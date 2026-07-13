@@ -226,24 +226,60 @@ def wake_line(events: list[dict[str, Any]], agent_id: str, *, preview: bool = Fa
     return " ".join(parts)
 
 
-def once_digest(events: list[dict[str, Any]]) -> str:
+def _owed_counts(hub: str, agent_id: str) -> tuple[int, int] | None:
+    """Best-effort owed counts for the wake surfaces (0079): a wake should
+    carry the debt, so the woken turn starts knowing what it OWES instead of
+    just that something arrived (the lurker incident: wakes announced
+    arrival, agents acked arrival, nobody surfaced the debt). Never blocks a
+    wake: cached key only, short timeout, any failure -> None."""
+    try:
+        key = _config.get_cached_key(hub, agent_id)
+        if not key:
+            return None
+        import httpx
+        r = httpx.get(f"{hub.rstrip('/')}/owed",
+                      headers={"Authorization": f"Bearer {key}"}, timeout=5.0)
+        if r.status_code != 200:
+            return None
+        counts = r.json().get("counts", {})
+        return int(counts.get("to_answer", 0)), int(counts.get("to_consume", 0))
+    except Exception:
+        return None
+
+
+def once_digest(events: list[dict[str, Any]],
+                owed: tuple[int, int] | None = None) -> str:
     """--once stderr digest: informational, redacted (counts + channel names).
     Channel names are clamped (Claude shows this stderr to the model verbatim,
-    so a crafted name must not smuggle newlines or instructions into it)."""
+    so a crafted name must not smuggle newlines or instructions into it).
+    The verb order is deliberate (anti-lurk): DO comes before reply, and ack
+    is named last as what it is — a seen-marker that discharges nothing."""
     chans = sorted({_safe_channel(str(ev["channel"])) for ev in events})
     shown = ", ".join(chans[:_CHANNEL_CAP])
     if len(chans) > _CHANNEL_CAP:
         shown += f" (+{len(chans) - _CHANNEL_CAP} more)"
-    return (f"AGORA: you have {len(events)} new message(s) in {shown}. Review and "
-            "decide what needs action; reply where a reply is owed; ack what you "
-            "have seen.")
+    text = (f"AGORA: you have {len(events)} new message(s) in {shown}. Triage "
+            "each: DO or claim what is yours to do; read and use answers to "
+            "your own asks; reply where a reply is owed; then ack. Ack means "
+            "seen, not done.")
+    if owed and (owed[0] or owed[1]):
+        text += (f" You currently owe {owed[0]} answer(s) and {owed[1]} "
+                 "unconsumed answer(s) to your own asks — check_inbox lists "
+                 "them; settle those before new work.")
+    return text
 
 
-def _deliver_wake(batch, agent_id, *, preview: bool, once: bool) -> int | None:
+def _deliver_wake(batch, agent_id, *, preview: bool, once: bool,
+                  hub: str = "") -> int | None:
     """Emit the wake sentinel (+ stderr digest and exit-2 in --once mode)."""
-    _emit(wake_line(batch, agent_id, preview=preview))
+    owed = _owed_counts(hub, agent_id) if hub else None
+    line = wake_line(batch, agent_id, preview=preview)
+    if owed and (owed[0] or owed[1]):
+        # Identifiers-only guarantee holds: a bare integer, no agent text.
+        line += f" owed={owed[0] + owed[1]}"
+    _emit(line)
     if once:
-        print(once_digest(batch), file=sys.stderr, flush=True)
+        print(once_digest(batch, owed), file=sys.stderr, flush=True)
         return 2
     return None
 
@@ -412,7 +448,8 @@ def run_file_mode(path: Path, agent_id: str, hub_url: str, pid_path: Path, *,
                     batcher.add(event)
             batch = batcher.pop_ready()
             if batch:
-                code = _deliver_wake(batch, agent_id, preview=preview, once=once)
+                code = _deliver_wake(batch, agent_id, preview=preview,
+                                     once=once, hub=hub_url)
                 if code is not None:
                     return code
             if heartbeat > 0 and time.monotonic() - last_beat >= heartbeat:
@@ -486,7 +523,8 @@ async def run_ws_mode(url: str, key: str, agent_id: str, pid_path: Path, *,
             events = [json.loads(line) for line in lines]
             batch = [ev for ev in events if qualifies(ev, agent_id, important_only)]
             if batch:
-                code = _deliver_wake(batch, agent_id, preview=preview, once=once)
+                code = _deliver_wake(batch, agent_id, preview=preview,
+                                     once=once, hub=url)
                 if code is not None:
                     return code
     finally:

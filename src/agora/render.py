@@ -137,11 +137,14 @@ def render_envelopes(rows: list[dict[str, Any]]) -> str:
         content = (e.body if e.body is not None
                    else f"(body not delivered — read_message id={e.id} if the headline warrants it)")
         blocks.append(_fence(nonce, f"envelope id={e.id}", fields, content))
-    triage = ("Triage: you MUST read CRITICAL and ESCALATED items and eventually "
-              "reply to open/blocked ones; fyi items are safely skippable by "
-              "headline. For a message with unanswered asks, answer the specific "
-              "open ask ids (post status=reply with answers=[...]). Then ack_inbox "
-              "what you have seen.")
+    triage = ("Triage: you MUST read CRITICAL and ESCALATED items. An "
+              "open/blocked ask naming you — in `to` OR inside an ask — is "
+              "YOURS: answer its ask ids (status=reply, answers=[...]), and "
+              "where it asks for work, DO or claim the work now, not just the "
+              "reply. reply-to-you answers YOUR OWN ask: read it and use it "
+              "before acking. fyi is skippable unless it touches something you "
+              "own. Then ack_inbox — ack means SEEN, never done: it clears "
+              "nothing you still owe (check_inbox shows your owed debts).")
     return _preamble(nonce) + "\n\n" + "\n\n".join(blocks) + f"\n\n{triage}"
 
 

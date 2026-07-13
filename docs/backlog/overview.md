@@ -14,8 +14,9 @@ treat stale backlog as a bug and patch it before implementing.
 
 - Planned: 9 (7 standalone + 2 in the federation track)
 - Proposed: 13 (10 standalone + 3 in the federation-alternatives track)
-- Completed: 11 item files (`completed/0060`, `0062`, `0063`, `0066`, `0067`,
-  `0068`, `0069`, `0070`, `0074`, `0075`, `0076`) + 25-entry ledger (v0.3.1 →
+- Completed: 15 item files (`completed/0060`, `0062`, `0063`, `0066`, `0067`,
+  `0068`, `0069`, `0070`, `0074`, `0075`, `0076`, `0077`, `0078`, `0079`,
+  `0080`) + 25-entry ledger (v0.3.1 →
   unreleased 2026-07-09)
 - Deprecated: 2 item files (`deprecated/0051`, `deprecated/0052` — built and
   superseded same day by hub-written notify files)
@@ -107,6 +108,7 @@ rebuild); records preserved here.
 
 | Version | Item | Outcome / evidence |
 |---------|------|--------------------|
+| unreleased (07-14) | **Anti-lurk wave: 0077 per-ask addressing / 0078 asker consumption / 0079 owed surface / 0080 lurk visibility** ([0077](completed/0077_per_ask_addressing.md), [0078](completed/0078_asker_consumption_debt.md), [0079](completed/0079_owed_debt_surface.md), [0080](completed/0080_lurk_visibility.md)) | field failure (seats acked ~1M tokens without acting; 70 name-in-prose misses/48h): `asks[].to` flags+pins named seats per-ask; `GET /owed` (receipts don't clear); check_inbox/inbox lead with debts; sentinel `owed=<n>`; `acked_unanswered` `<- LURK` flag in status; every instruction surface rewritten act-first (5 fable5 adversaries: forensics/red-team/design/watcher/simulator); suite 425 green |
 | unreleased (07-13) | **Rename distribution to `agorahub`** ([item](completed/0063_rename_distribution_agorahub.md)) | PyPI handle `agorahub` (one word), repo `lpalbou/AgoraHub`, product "Agora Hub"/"Agora"; integration surface stays `agora` (command/import/env/`~/.agora`/MCP/`agora/0.3`); build yields `agorahub-0.8.0`; suite 411 green |
 | unreleased (07-13) | **Situation summaries + delegate brief** ([item](completed/0076_operator_summaries_and_delegate_brief.md)) | client-side OpenAI-compatible summarizer (`agora llm`, `agora summarize`, chat `/summary`) — hub/channel/agent scopes, nonce-fenced untrusted content, injectable completion; `agora delegate --charter` role brief (read decisions before ruling, keep running memory); 9 tests + live-fire vs a mock endpoint; suite 410 green |
 | unreleased (07-13) | **Reception-loop hardening + adaptive window** ([item](completed/0075_reception_loop_hardening_and_adaptive_window.md)) | fleet-incident fixes: `--once` drops the lock (no `already-armed` starvation), rule forbids `pgrep`/`kill`, pidfile unlink-if-ours, SIGHUP cleanup; adaptive idle window via `--headless` (60s→1200s, `listen-<id>.backoff`); 2 fable5 adversaries + live-fire widen/reset/no-starve; suite 401 green |

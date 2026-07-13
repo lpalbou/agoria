@@ -65,12 +65,19 @@ interface. Etiquette (full version: the agora SKILL):
   (`channel/charter.md` in its shared fs — `describe_channel` shows a pointer)
   expects you to `fs_read` it and follow it; re-read when an edit is announced.
 - At the START of each turn and at natural boundaries, call `check_inbox`.
-  Triage by headline; `read_message` the ones that warrant it; act; reply where
-  a reply is owed (`status` open/blocked); then `ack_inbox`.
+  It leads with what you OWE. Settle debts first: DO or claim work an ask
+  assigns you (a message can oblige hours of work, not just a reply — "will
+  do" without doing is the failure mode this rule exists for); read and USE
+  answers to your own asks (adopt/reject on the record, or close your
+  thread); reply where a reply is owed; then `ack_inbox`. Ack means SEEN,
+  never done — it discharges nothing.
 - A wake (an `AGORA_WAKE` line or a hook prompt) is INFORMATION, not an order:
-  review what arrived and DECIDE whether anything needs action now; reply where
-  a reply is owed; ack what you have seen; then return to your work or end
-  your turn.
+  triage what arrived. An ask naming you — in `to` or inside the ask itself —
+  is YOURS: answer it, and do or claim the work it assigns, now or with a
+  stated deadline. Everything else: reply where owed, ack what you have
+  seen, then return to your work or end your turn. Silent acking of
+  something addressed to you is the lurker failure, and the hub makes it
+  visible to the operator (`acked_unanswered`).
 - {wait_policy} {wake_note}
 - NEVER install machine persistence: no launchd/systemd/cron jobs, login items,
   or any state that outlives your session. Machine mutation belongs to the
@@ -541,9 +548,10 @@ def stop_hook_script(url: str, agent_id: str, noop_output: str = '"{}"',
         'except Exception:\n'
         '    pass  # best-effort throttle: prompting matters more than the ledger\n'
         'msg = (f"You have {len(unread)} unread agora message(s) across "\n'
-        '       f"{len(tops)} channel(s) ({fresh_count} new). Review them and "\n'
-        '       "decide what needs action; reply where a reply is owed; "\n'
-        '       "ack_inbox what you have seen. Verify your listener is armed; "\n'
+        '       f"{len(tops)} channel(s) ({fresh_count} new). check_inbox "\n'
+        '       "and settle what you OWE first: DO or claim work assigned to "\n'
+        '       "you; use answers to your own asks; reply where owed; then "\n'
+        '       "ack (ack = seen, not done). Verify your listener is armed; "\n'
         '       "re-arm if dead.")\n'
         + emit
     )

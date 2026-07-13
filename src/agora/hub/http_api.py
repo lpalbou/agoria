@@ -543,6 +543,17 @@ async def inbox(
     return [m.model_dump() for m in messages]
 
 
+@router.get("/owed")
+def owed(
+    agent: AgentInfo = Depends(current_agent),
+    service: HubService = Depends(get_service),
+) -> dict[str, Any]:
+    """The caller's outstanding debts (anti-lurk, 0079): asks awaiting THEIR
+    answer and answers to THEIR OWN asks awaiting consumption. Read receipts
+    are deliberately ignored — read-but-unanswered is the lurk case."""
+    return _run(service.owed, agent)
+
+
 class AckInbox(BaseModel):
     cursors: dict[str, int]  # channel -> highest seq read
 

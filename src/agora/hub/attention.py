@@ -28,6 +28,7 @@ from ..models import (
     Status,
     Urgency,
 )
+from .obligations import ask_addressees
 
 DEFAULT_RESPONSE_SLA_MINUTES = 60.0
 
@@ -66,7 +67,10 @@ class AttentionPolicy:
         # closure stops escalation on the spot. `has_resolved_reply` is the
         # reader's context signal ("this thread carries a resolved reply —
         # check before answering"), independent of whether it closed.
-        to_me = viewer_id in message.to
+        # to_me includes seats named by a per-ask `to` (0077): a canvass row
+        # that names you IS addressed to you, flag included — names living
+        # only in ask prose flagged nobody (the lurker incident's miss B).
+        to_me = viewer_id in message.to or viewer_id in ask_addressees(message)
         reply_to_me = parent_sender == viewer_id if parent_sender else False
         body_bytes = len(message.body.encode())
         inline = self._should_inline(message, to_me, reply_to_me, body_bytes)

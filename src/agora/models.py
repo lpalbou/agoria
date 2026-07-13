@@ -138,6 +138,11 @@ class Ask(BaseModel):
     id: str
     text: str
     assignee: str | None = None  # optional: who is expected to answer (reserved; advisory)
+    # Per-ask addressing (0077, anti-lurk): the seats this ask names. The hub
+    # validates membership and flags the envelope to-me for every named seat,
+    # so a canvass row can never again be buried by headline scroll (field
+    # incident: 70 name-in-TEXT misses in 48h — names in prose flag nobody).
+    to: list[str] = Field(default_factory=list)
 
 
 class PostMessage(BaseModel):

@@ -46,7 +46,13 @@ from ..models import (
 )
 from .attention import DEFAULT_RESPONSE_SLA_MINUTES, AttentionPolicy, SlidingWindowBudget
 from .notify import FanOut, LoopBinder, Notifier
-from .obligations import asks_of, discharge_state
+from .obligations import (
+    ask_addressees,
+    asks_of,
+    closed_authoritatively,
+    discharge_state,
+    pending_addressees,
+)
 from .presence import PresenceTracker
 from .ratelimit import RateLimiter
 
@@ -434,7 +440,12 @@ class HubService:
 
     # -- messages -----------------------------------------------------------------
 
-    def _validate_asks(self, raw: Any, status: Status) -> list[dict[str, Any]]:
+    #: Per-ask addressing cap (0077): more than 3 named answerers on ONE ask
+    #: is diffusion of responsibility — use message-level `to` for broadcast.
+    MAX_ASK_TO = 3
+
+    def _validate_asks(self, raw: Any, status: Status, *, sender: str = "",
+                       channel: str = "") -> list[dict[str, Any]]:
         """Normalize + validate structured asks. Applied to whatever ends up in
         the message data — whether it arrived via the typed `asks` param or was
         hand-crafted into the raw `data` payload — so there is no bypass path."""
@@ -444,6 +455,7 @@ class HubService:
             raise HubError(400, "asks must be a list")
         if len(raw) > MAX_ASKS:
             raise HubError(400, f"too many asks (max {MAX_ASKS})")
+        members: set[str] | None = None
         seen: set[str] = set()
         norm: list[dict[str, Any]] = []
         for a in raw:
@@ -456,6 +468,31 @@ class HubService:
             entry = {"id": aid, "text": sanitize_text(str(a.get("text", "")), MAX_ASK_CHARS)}
             if a.get("assignee"):
                 entry["assignee"] = sanitize_text(str(a["assignee"]), MAX_ASSIGNEE_CHARS)
+            if a.get("to"):
+                # Per-ask addressing (0077, anti-lurk): naming a seat INSIDE an
+                # ask must flag that seat mechanically — the field incident was
+                # 70 asks in 48h naming seats only in prose, which flags nobody
+                # and buries canvass rows in headline scroll.
+                if not isinstance(a["to"], list):
+                    raise HubError(400, f"ask '{aid}': to must be a list of agent ids")
+                named = [str(x) for x in a["to"]]
+                if len(named) > self.MAX_ASK_TO:
+                    raise HubError(400, f"ask '{aid}' addresses {len(named)} seats "
+                                        f"(max {self.MAX_ASK_TO}) — use the message-"
+                                        "level to for broadcast")
+                if sender and sender in named:
+                    raise HubError(400, f"ask '{aid}': you cannot address an ask "
+                                        "to yourself")
+                if channel:
+                    if members is None:
+                        members = {m.agent_id for m in self.db.list_members(channel)}
+                    outsiders = [n for n in named if n not in members]
+                    if outsiders:
+                        raise HubError(400, f"ask '{aid}' addresses non-members: "
+                                            f"{outsiders} — describe_channel lists "
+                                            "who is here; drop the name or leave "
+                                            "the ask broadcast")
+                entry["to"] = named
             norm.append(entry)
         return norm
 
@@ -517,7 +554,8 @@ class HubService:
         if payload.answers is not None:
             data["answers"] = [str(x) for x in payload.answers]
         if "asks" in data:
-            data["asks"] = self._validate_asks(data["asks"], payload.status)
+            data["asks"] = self._validate_asks(data["asks"], payload.status,
+                                               sender=sender, channel=channel)
         if "answers" in data:
             data["answers"] = self._validate_answers(data["answers"], payload.status,
                                                      payload.reply_to, sender)
@@ -782,11 +820,17 @@ class HubService:
                                         **({"self_resolved": True}
                                            if self_resolved else {})})
                     else:
-                        asks = {str(a["id"]): a.get("text", "") for a in asks_of(m)}
+                        asks = {str(a["id"]): a for a in asks_of(m)}
                         open_questions.append({
                             **brief, "status": m.status.value,
-                            "pending_asks": [{"id": i, "text": asks.get(i, "")}
-                                             for i in state.pending],
+                            "pending_asks": [
+                                {"id": i, "text": asks.get(i, {}).get("text", ""),
+                                 # Per-ask addressing (0077): named seats ride
+                                 # the digest so "scan for your name" is a
+                                 # field lookup, not a prose search.
+                                 **({"to": asks[i]["to"]}
+                                    if asks.get(i, {}).get("to") else {})}
+                                for i in state.pending],
                         })
                 elif m.status == Status.resolved:
                     decided.append({**brief, "resolved": True})
@@ -910,7 +954,12 @@ class HubService:
         members_cache: dict[str, set[str]] = {}
         hub_blocked = {b["agent_id"] for b in self.db.blocks_active(self.HUB_SCOPE)}
         for message in self.db.unread_obligation_candidates(agent.id, channels):
-            if message.to and agent.id not in message.to:
+            # Effective addressees = message-level `to` plus every seat named
+            # by a per-ask `to` (0077): a canvass that names you in an ask IS
+            # addressed to you — names living only in prose pinned nobody.
+            named = ask_addressees(message)
+            addressed = set(message.to) | named
+            if addressed and agent.id not in addressed:
                 # Addressee-left fallback (review MED-3): if NO addressee is
                 # still AVAILABLE, the obligation would become invisible to
                 # everyone — revert to broadcast pinning so it cannot rot in
@@ -921,11 +970,19 @@ class HubService:
                     members_cache[message.channel] = {
                         m.agent_id for m in self.db.list_members(message.channel)}
                 available = members_cache[message.channel] - hub_blocked
-                if any(a in available for a in message.to):
+                if any(a in available for a in addressed):
                     continue
-            if not discharge_state(message, self.db.replies_to(message.id),
-                                   self.operator_ids()).closed:
-                by_id[message.id] = message
+            ds = discharge_state(message, self.db.replies_to(message.id),
+                                 self.operator_ids())
+            if ds.closed:
+                continue
+            if (agent.id in named and agent.id not in message.to
+                    and agent.id not in pending_addressees(message, ds.pending)):
+                # Ask-scoped pin (0077): a seat named ONLY by asks stops being
+                # pinned once every ask naming it is answered — its canvass
+                # row is done even while other seats' rows stay open.
+                continue
+            by_id[message.id] = message
         # channel_sla is one store read per channel; cache it across the sweep
         # instead of per message (v0.3 perf finding H3).
         sla_cache: dict[str, float] = {}
@@ -936,6 +993,83 @@ class HubService:
             envelopes.append(self.envelope_for(agent.id, m, sla_minutes=sla_cache[m.channel]))
         envelopes.sort(key=lambda e: (not e.critical, not e.escalated, e.created_at))
         return envelopes
+
+    def owed(self, agent: AgentInfo) -> dict[str, Any]:
+        """The agent's outstanding debts (0079), read receipts deliberately
+        IGNORED: read-but-unanswered is precisely the lurk the receipt filter
+        would hide. Two ledgers:
+
+        - `to_answer`: open/blocked messages addressed to the agent — via
+          message `to`, an advisory assignee, or a still-pending per-ask `to`
+          (0077) — that are not closed and that the agent has not replied to
+          at all. Replying at all drops the row (the remaining debt is
+          other seats'); closure drops it everywhere.
+        - `to_consume` (0078): answers other seats posted to the agent's OWN
+          open questions that the agent has neither read (receipt) nor
+          followed in-thread (any later post of theirs) — the mechanical
+          form of "someone answered you; use it or close it". Clears on
+          read_message of the answer, on any later in-thread post by the
+          asker, or on authoritative closure. Never escalates, never wakes
+          by itself: it surfaces here, in check_inbox, and on the board.
+        """
+        channels = self.db.channels_of(agent.id)
+        ops = self.operator_ids()
+        now = time.time()
+        sla_cache: dict[str, float] = {}
+        to_answer: list[dict[str, Any]] = []
+        for m in self.db.open_obligations(channels):
+            if m.sender == agent.id:
+                continue
+            replies = self.db.replies_to(m.id)
+            ds = discharge_state(m, replies, ops)
+            if ds.closed:
+                continue
+            assignees = {a.get("assignee") for a in asks_of(m)} - {None}
+            named_pending = pending_addressees(m, ds.pending)
+            if not (agent.id in m.to or agent.id in assignees
+                    or agent.id in named_pending):
+                continue
+            if any(r.sender == agent.id for r in replies):
+                continue  # engaged: the remaining pending asks are other seats'
+            if m.channel not in sla_cache:
+                sla_cache[m.channel] = self.channel_sla(m.channel)
+            age = now - m.created_at - self.paused_seconds_since(m.created_at)
+            to_answer.append({
+                "channel": m.channel, "id": m.id, "seq": m.seq,
+                "from": m.sender, "title": m.title,
+                "pending_asks": ds.pending,
+                "asks_naming_you": sorted(
+                    str(a["id"]) for a in asks_of(m)
+                    if agent.id in (a.get("to") or []) and str(a["id"]) in ds.pending),
+                "age_minutes": round(age / 60, 1),
+                "escalated": age > sla_cache[m.channel] * 60.0,
+            })
+        to_consume: list[dict[str, Any]] = []
+        for m in self.db.my_open_messages(agent.id, channels):
+            replies = self.db.replies_to(m.id)
+            if closed_authoritatively(m, replies, ops):
+                continue
+            structured = bool(asks_of(m))
+            for r in replies:
+                if r.sender == agent.id:
+                    continue
+                answers = (r.data or {}).get("answers") or []
+                if structured and not answers:
+                    continue  # commentary, not an answer to a numbered ask
+                consumed = (self.db.has_read(r.id, agent.id)
+                            or any(x.sender == agent.id and x.seq > r.seq
+                                   for x in replies))
+                if not consumed:
+                    to_consume.append({
+                        "channel": m.channel, "id": m.id, "seq": m.seq,
+                        "title": m.title, "your_asks": [str(x) for x in answers],
+                        "answered_by": r.sender, "answer_id": r.id,
+                        "answer_seq": r.seq,
+                        "age_minutes": round((now - r.created_at) / 60, 1),
+                    })
+        return {"to_answer": to_answer, "to_consume": to_consume,
+                "counts": {"to_answer": len(to_answer),
+                           "to_consume": len(to_consume)}}
 
     async def wait_inbox(self, agent: AgentInfo, timeout: float) -> list[Envelope]:
         """Long-poll: return unread envelopes, waiting up to `timeout` for one."""
@@ -1575,7 +1709,11 @@ class HubService:
                     state = discharge_state(m, self.db.replies_to(m.id), ops)
                     if state.closed:
                         continue
+                    # Addressees = advisory assignees + per-ask `to` (0077):
+                    # a seat named by a still-pending ask has this row
+                    # pending ON IT, not floating as a proposal.
                     assignees = {a.get("assignee") for a in asks_of(m)} - {None}
+                    assignees |= pending_addressees(m, state.pending)
                     age = now - m.created_at - self.paused_seconds_since(m.created_at)
                     row = {"channel": channel, "seq": m.seq, "id": m.id,
                            "from": m.sender, "q": m.title or m.body[:120],
@@ -1871,19 +2009,35 @@ class HubService:
         now = time.time()
         out = []
         for agent_id in self.db.list_agent_ids():
-            envelopes = self.inbox(AgentInfo(id=agent_id, name=agent_id))
+            info = AgentInfo(id=agent_id, name=agent_id)
+            envelopes = self.inbox(info)
             pending = [e for e in envelopes
                        if e.status in (Status.open, Status.blocked) or e.critical]
             oldest = min((e.created_at for e in pending), default=None)
             presence = self.presence.get(agent_id)
             refusals = [r for r in self.refusals.get(agent_id, ())
                         if now - r["ts"] < 3600.0]
+            # The lurk metric (0080): debts owed with the cursor already PAST
+            # them — the seat served the message, acked it, and never engaged.
+            # Computed from the same owed ledger the agent itself sees.
+            debts = self.owed(info)
+            acked_unanswered = 0
+            cursor_cache: dict[str, int] = {}
+            for row in debts["to_answer"]:
+                ch = row["channel"]
+                if ch not in cursor_cache:
+                    cursor_cache[ch] = self.db.get_cursor(agent_id, ch)
+                if cursor_cache[ch] >= row["seq"]:
+                    acked_unanswered += 1
             out.append({
                 "agent_id": agent_id,
                 "state": presence.state,
                 "unread": len(envelopes),
                 "pending_obligations": len(pending),
                 "oldest_pending_minutes": round((now - oldest) / 60, 1) if oldest else None,
+                "owed_answers": debts["counts"]["to_answer"],
+                "owed_consumption": debts["counts"]["to_consume"],
+                "acked_unanswered": acked_unanswered,
                 "refused_sends_1h": len(refusals),
                 "last_refusal": refusals[-1] if refusals else None,
             })

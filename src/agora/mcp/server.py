@@ -339,14 +339,48 @@ def build_server(credentials: tuple[str, str] | None = None):  # pragma: no cove
         result = _call("GET", f"/channels/{channel}/messages/{message_id}")
         return _render_messages(result) if isinstance(result, list) else str(result)
 
+    def _owed_header() -> str:
+        """The debt block that leads every inbox render (anti-lurk, 0079):
+        the woken turn must start knowing what it OWES, not just what
+        arrived. Identifiers only — titles are agent-authored and stay
+        behind read_message's nonce fence."""
+        try:
+            owed = _call("GET", "/owed")
+            counts = owed.get("counts", {})
+        except Exception:
+            return ""
+        if not (counts.get("to_answer") or counts.get("to_consume")):
+            return ""
+        lines = ["YOU OWE (settle these before new work; ack clears none of it):"]
+        for row in owed.get("to_answer", [])[:10]:
+            naming = (f" asks naming you: {row['asks_naming_you']}"
+                      if row.get("asks_naming_you") else "")
+            lines.append(f"- ANSWER {row['channel']}#{row['seq']} from "
+                         f"{row['from']} (pending {row['pending_asks']},"
+                         f"{naming} {row['age_minutes']}m"
+                         f"{', ESCALATED' if row.get('escalated') else ''}) — "
+                         f"read_message id={row['id']}, then reply with answers=[...]"
+                         " and DO or claim any work it assigns")
+        for row in owed.get("to_consume", [])[:10]:
+            lines.append(f"- CONSUME {row['channel']}#{row['answer_seq']}: "
+                         f"{row['answered_by']} answered YOUR ask "
+                         f"{row['your_asks']} ({row['age_minutes']}m ago) — "
+                         f"read_message id={row['answer_id']} and use it "
+                         "(adopt/reject on the record, or close your thread)")
+        return "\n".join(lines) + "\n\n"
+
     @mcp.tool()
     def check_inbox() -> str:
-        """Non-blocking: unread ENVELOPES (headlines) across all your channels;
-        bodies included only when small, addressed to you, or critical.
-        Call at natural boundaries in your work (interleaving); triage by
-        headline; fetch worthwhile bodies with read_message; then ack_inbox."""
+        """Non-blocking: your OWED debts first (asks awaiting your answer or
+        work; answers to your own asks awaiting consumption), then unread
+        ENVELOPES (headlines) across your channels; bodies included only when
+        small, addressed to you, or critical. A message can oblige WORK, not
+        just a reply — do or claim what is yours. Call at natural boundaries;
+        ack_inbox marks seen and discharges nothing."""
         result = _call("GET", "/inbox")
-        return _render_envelopes(result) if isinstance(result, list) else str(result)
+        if not isinstance(result, list):
+            return str(result)
+        return _owed_header() + _render_envelopes(result)
 
     @mcp.tool()
     def wait_for_messages(timeout_seconds: float = 45.0) -> str:
@@ -354,12 +388,16 @@ def build_server(credentials: tuple[str, str] | None = None):  # pragma: no cove
         envelope. In-turn pull fallback for sessions with no `agora listen`
         armed; a listener-armed session is woken instead and never needs it."""
         result = _call("GET", "/inbox", params={"wait": min(timeout_seconds, 55.0)})
-        return _render_envelopes(result) if isinstance(result, list) else str(result)
+        if not isinstance(result, list):
+            return str(result)
+        return _owed_header() + _render_envelopes(result)
 
     @mcp.tool()
     def ack_inbox(cursors: dict[str, int]) -> dict:
-        """Acknowledge triage: {channel_name: highest_seq_you_have_seen}.
-        This marks envelopes as seen (they stop re-appearing); critical
+        """A receipt, not a discharge: {channel_name: highest_seq_you_have_seen}
+        marks envelopes as seen (they stop re-appearing). It clears NOTHING you
+        owe — unanswered asks assigned to you and unconsumed answers to your
+        own asks stay owed after ack (check_inbox lists them); critical
         messages additionally require read_message before they unpin."""
         return _call("POST", "/inbox/ack", json={"cursors": cursors})
 

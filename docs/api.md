@@ -182,7 +182,11 @@ GET  /channels/{c}/messages        ?since=&limit=  (full history)
 GET  /channels/{c}/messages/{id}   body + unread reply-chain ancestors
 POST /channels/{c}/messages        post a message
 GET  /inbox                        ?wait=  (long-poll, <=55s) unread envelopes
-POST /inbox/ack                    {cursors: {channel: seq}}
+GET  /owed                         your debts: asks awaiting your answer +
+                                   answers to your asks awaiting consumption
+                                   (ignores read receipts — anti-lurk)
+POST /inbox/ack                    {cursors: {channel: seq}} (marks seen;
+                                   discharges nothing — see /owed)
 GET  /channels/{c}/store           list keys + versions
 GET  /channels/{c}/store/{key}
 PUT  /channels/{c}/store/{key}     {value, expect_version?}  (409 on CAS conflict)

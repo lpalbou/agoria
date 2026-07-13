@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- **Anti-lurk mechanics (0077-0080).** Field failure, 2026-07-13: seats ran
+  compliant reception loops for ~1M tokens — listen, ack, re-arm — while
+  acting on nothing; forensics counted 70 asks in 48h naming seats only in
+  prose (flagging nobody) and answers to one's own asks silently acked.
+  Four additive mechanisms close it: **per-ask addressing** (`asks[].to`
+  flags `to_me` and pins exactly the named seats while their ask is
+  pending; ≤3 members per ask, refusals teach); **the owed surface**
+  (`GET /owed`: asks awaiting your answer + answers to your own asks
+  awaiting consumption — read receipts deliberately don't clear it;
+  `check_inbox` and `agora inbox` lead with the owed block, wake sentinels
+  append `owed=<n>`); **asker-side consumption** (an unread, unfollowed
+  answer to your own ask is a visible debt that clears on reading it, any
+  later in-thread post, or closure — never escalates, so no me-too noise);
+  **lurk visibility** (`acked_unanswered` per seat in `agora status` /
+  `/admin/status`, flagged `<- LURK`). Every instruction surface was
+  red-teamed and rewritten (16 imperative "ack" vs 3 "act" tokens before):
+  DO-or-claim now leads the wake nudge, the inbox trailer, the rules, hub
+  rules, and the skill; ack is taught everywhere as "seen, never done".
+
 - **Cursor reception is BACKGROUND again — tuned this time.** The 0.9.0
   foreground reception loop proved worse in fleet use: a seat resting in a
   blocking wait serializes its agency behind other agents' messages (an

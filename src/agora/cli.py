@@ -696,6 +696,28 @@ def cmd_inbox(args):
     from .render import render_envelopes
 
     async def go(c, a):
+        # Debts lead (anti-lurk, 0079): the reader must meet what it OWES
+        # before the new arrivals — identifiers only, titles stay fenced.
+        try:
+            owed = await c.owed()
+        except Exception:
+            owed = None  # pre-0.10 hub: no /owed yet
+        if owed and (owed["counts"]["to_answer"] or owed["counts"]["to_consume"]):
+            print("YOU OWE (ack clears none of this):")
+            for row in owed["to_answer"][:10]:
+                naming = (f" asks naming you: {row['asks_naming_you']}"
+                          if row.get("asks_naming_you") else "")
+                esc = ", ESCALATED" if row.get("escalated") else ""
+                print(f"- ANSWER {row['channel']}#{row['seq']} from {row['from']}"
+                      f" (pending {row['pending_asks']},{naming}"
+                      f" {row['age_minutes']}m{esc}) — read id={row['id']},"
+                      " reply with answers=[...], DO or claim assigned work")
+            for row in owed["to_consume"][:10]:
+                print(f"- CONSUME {row['channel']}#{row['answer_seq']}:"
+                      f" {row['answered_by']} answered YOUR ask {row['your_asks']}"
+                      f" ({row['age_minutes']}m ago) — read id={row['answer_id']}"
+                      " and use it, or close your thread")
+            print()
         envs = await c.check_inbox(wait=a.wait)
         print(render_envelopes([e.model_dump(mode="json") for e in envs]))
     _run_agent_cmd(args, go)
@@ -1177,6 +1199,12 @@ def cmd_status(args: argparse.Namespace) -> None:
                 flag = " <- DARK: offline with work pending"
             elif row["state"] == "active":
                 flag = " <- NO-PUSH: pending work, no live connection"
+        # The lurk alarm (0080): the seat SERVED these debts (cursor past
+        # them) and never engaged — the compliant-spectator signature the
+        # 2026-07-13 incident put a name on.
+        if row.get("acked_unanswered"):
+            flag += (f" <- LURK: acked {row['acked_unanswered']} owed "
+                     "answer(s) without replying")
         if row.get("refused_sends_1h"):
             last = row.get("last_refusal") or {}
             flag += (f" <- BLOCKED-SEND: {row['refused_sends_1h']}x last hour "

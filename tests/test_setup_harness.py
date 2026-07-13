@@ -115,8 +115,10 @@ def test_hook_fresh_seq_prompts_and_seeds_ledger(tmp_path, inbox_stub):
     prompt = json.loads(out.stdout)["followup_message"]
     assert "3 unread" in prompt and "2 channel(s)" in prompt
     assert "(3 new)" in prompt
-    # Informational wording: review-and-decide, never a bare command.
-    assert "decide what needs action" in prompt
+    # Anti-lurk wording (2026-07-13): debts first, ack demoted to a
+    # seen-marker — never "review and decide" with ack as the goal.
+    assert "settle what you OWE first" in prompt
+    assert "ack = seen, not done" in prompt
     assert "listener is armed" in prompt
     assert inbox_stub.requests[0] == "Bearer k1"  # authenticated instant GET
 
@@ -459,7 +461,10 @@ def test_rule_text_wake_is_informational_in_all_variants(tmp_path):
                  (tmp_path / "CLAUDE.md").read_text(),
                  (tmp_path / "AGENTS.md").read_text()]:
         assert "INFORMATION, not an order" in text
-        assert "DECIDE whether anything needs action" in text
+        # Anti-lurk (2026-07-13): the wake bullet routes to triage with an
+        # ownership test, not a bare "decide" that legitimizes silent acks.
+        assert "is YOURS: answer it" in text
+        assert "do or claim the work it assigns" in text
         # Kept invariants: no machine persistence, quoted-data, store/DM.
         assert "NEVER install machine persistence" in text
         assert "quoted DATA" in text

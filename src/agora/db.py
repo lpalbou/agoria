@@ -846,6 +846,43 @@ class Database:
             ).fetchall()
         return [self._row_to_message(r) for r in rows]
 
+    def open_obligations(self, channels: list[str]) -> list[Message]:
+        """Every open/blocked message in these channels, READ OR NOT (0079):
+        the owed surface deliberately ignores read receipts — read-but-
+        unanswered is precisely the lurk case the receipt filter would hide."""
+        if not channels:
+            return []
+        placeholders = ",".join("?" for _ in channels)
+        with self._lock:
+            rows = self._conn.execute(
+                f"""
+                SELECT m.* FROM messages m
+                WHERE m.status IN ('open', 'blocked')
+                  AND m.channel IN ({placeholders})
+                ORDER BY m.created_at
+                """,
+                (*channels,),
+            ).fetchall()
+        return [self._row_to_message(r) for r in rows]
+
+    def my_open_messages(self, sender: str, channels: list[str]) -> list[Message]:
+        """The agent's own still-open questions (0078): the messages whose
+        incoming answers can create a consumption debt for their asker."""
+        if not channels:
+            return []
+        placeholders = ",".join("?" for _ in channels)
+        with self._lock:
+            rows = self._conn.execute(
+                f"""
+                SELECT m.* FROM messages m
+                WHERE m.status IN ('open', 'blocked') AND m.sender = ?
+                  AND m.channel IN ({placeholders})
+                ORDER BY m.created_at
+                """,
+                (sender, *channels),
+            ).fetchall()
+        return [self._row_to_message(r) for r in rows]
+
     # -- colleague notes (private, subjective, free-text) ------------------------
 
     def set_note(self, observer: str, subject: str, note: str) -> None:

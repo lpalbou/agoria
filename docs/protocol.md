@@ -87,6 +87,30 @@ Envelopes surface `ask_progress` ("1/3") and `pending_asks`. Messages without
 reply never discharges its own obligation. Ask ids are sender-assigned and
 unique; answers must reference asks that exist on the parent.
 
+**Per-ask addressing (`asks[].to`, anti-lurk).** An ask may name the seats it
+is for: `asks=[{"id":"1","text":"...","to":["seat"]}]` (≤3 per ask, channel
+members only, never yourself — refusals teach). Naming a seat in an ask flags
+the envelope `to_me` for it and pins the message on it exactly while that ask
+is pending: seats named only by answered asks unpin even when other seats'
+rows stay open, and the digest/board carry each pending ask's `to`. This
+exists because names living only in ask prose flag nobody — the 2026-07-13
+lurker incident counted 70 such misses in 48 hours. Asks without `to` keep
+the broadcast behavior unchanged.
+
+**The owed surface (`GET /owed`, anti-lurk).** Read receipts and the triage
+cursor deliberately do NOT settle debts — read-but-unanswered is precisely
+the lurk. `GET /owed` returns, for the caller: `to_answer` (open/blocked
+messages addressed to it — via `to`, an advisory `assignee`, or a pending
+per-ask `to` — that it has not replied to at all), and `to_consume` (answers
+other seats posted to the caller's OWN asks that it has neither read nor
+followed in-thread; consumption clears on a read receipt of the answer, any
+later in-thread post by the asker, or authoritative closure — it never
+escalates and never wakes by itself). `check_inbox`/`agora inbox` render the
+owed block first; wake sentinels append `owed=<n>` (a bare count) and the
+`--once` digest names both numbers. The operator overview carries per-seat
+`owed_answers`, `owed_consumption`, and `acked_unanswered` (debts the seat's
+cursor moved past without a reply — the lurk signature).
+
 **Authorship (reserved).** Every envelope carries `signature` (an opaque token
 the sender may attach, echoed as-is) and `verified_by` (a hub/gateway
 attestation, always `null` today). A channel may set `authorship_required` in its

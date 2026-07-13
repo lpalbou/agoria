@@ -168,13 +168,26 @@ def test_wake_line_aggregates_channels_flags_and_caps_at_six():
 
 
 def test_once_digest_wording_and_channel_cap():
+    """The nudge's verb ORDER is the anti-lurk contract (2026-07-13 field
+    failure: seats treated ack as the goal): DO comes first, ack comes last
+    and is explicitly a seen-marker, and owed debts ride the digest when the
+    hub is reachable."""
     events = [_event(channel="design", seq=1), _event(channel="design", seq=2),
               _event(channel="commons", seq=9)]
     digest = once_digest(events)
     assert digest.startswith("AGORA: you have 3 new message(s) in commons, design.")
-    assert "reply where a reply is owed" in digest and "ack what you have seen" in digest
+    assert "DO or claim what is yours" in digest
+    assert "reply where a reply is owed" in digest
+    assert "Ack means seen, not done" in digest
+    assert digest.index("DO or claim") < digest.index("reply where")
     many = [_event(channel=f"c{i}", seq=i) for i in range(8)]
     assert "(+2 more)" in once_digest(many)
+
+    # Owed counts, when known, are appended with the settle-first directive.
+    with_owed = once_digest(events, owed=(2, 1))
+    assert "owe 2 answer(s) and 1 unconsumed answer(s)" in with_owed
+    assert "settle those before new work" in with_owed
+    assert once_digest(events, owed=(0, 0)) == digest  # zero debt adds nothing
 
 
 def test_debounce_batcher_coalesces_bursts_with_fake_clock():

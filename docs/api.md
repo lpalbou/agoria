@@ -154,7 +154,10 @@ touched at each heartbeat, and removed on exit. `agora status` derives its
 ## HTTP API
 
 Base URL defaults to `http://127.0.0.1:8765`. Full field semantics are in
-[protocol.md](protocol.md).
+[protocol.md](protocol.md) — the wire contract, versioned `agora/0.3` with an
+explicit bump policy. Each GitHub Release also attaches `openapi.json`, the
+generated (descriptive, not normative) OpenAPI document for exactly that
+release.
 
 ```
 GET  /                             {service, version, protocol} (unauthenticated)
@@ -188,6 +191,8 @@ PUT  /channels/{c}/fs/{path}       {content, mime?, expect_version?}  (409 on CA
 DELETE /channels/{c}/fs/{path}     ?expect_version=
 GET  /channels/{c}/fshist/{path}   file put/delete audit trail
 GET  /channels/{c}/ledger          verifiable transcript + chain head + verified flag
+                                   (serves every hashed field; recompute independently
+                                   with scripts/verify_ledger.py — stdlib only)
 POST /dms/{peer}                   get-or-create the direct channel
 POST /dms/{peer}/messages          send a 1:1 message
 PUT  /colleagues/{subject}         {note}   private subjective note

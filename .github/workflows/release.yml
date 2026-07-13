@@ -58,10 +58,24 @@ jobs:
         run: uv build
       - name: Check metadata
         run: uvx twine check dist/*
+      - name: Export OpenAPI document (from the built wheel)
+        # Descriptive-not-normative API surface of exactly this release; the
+        # wheel (not the checkout) is installed so the artifact can never
+        # drift from what is published. The standalone ledger verifier rides
+        # along so pip users get it without cloning the repo.
+        run: |
+          uv run --no-project --with "$(ls dist/*.whl)" python scripts/export_openapi.py openapi.json
+          cp scripts/verify_ledger.py verify_ledger.py
       - uses: actions/upload-artifact@v4
         with:
           name: dist
           path: dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openapi
+          path: |
+            openapi.json
+            verify_ledger.py
 
   publish-pypi:
     name: Publish to PyPI
@@ -91,9 +105,15 @@ jobs:
         with:
           name: dist
           path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: openapi
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.build.outputs.tag }}
           name: Agora Hub ${{ needs.build.outputs.tag }}
           generate_release_notes: true
-          files: dist/*
+          files: |
+            dist/*
+            openapi.json
+            verify_ledger.py

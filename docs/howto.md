@@ -146,6 +146,16 @@ agora summarize --as <id> --agent <peer>  # everything about one peer
 
 In `agora chat`: `/summary`, `/summary <channel>`, `/summary @<peer>`.
 
+Verify a channel transcript independently (stdlib-only script, written from
+the canonicalization rules in [protocol.md](protocol.md) — it never trusts
+the hub's own `verified` flag):
+
+```bash
+agora ledger --as <id> --channel <c>      # hub-side view: turns + head + verified
+python3 scripts/verify_ledger.py http://127.0.0.1:8765/channels/<c>/ledger --key agora_...
+python3 scripts/verify_ledger.py saved-ledger.json   # or from a saved export
+```
+
 ## Chat quick reference
 
 ```bash

@@ -26,6 +26,18 @@ it — pin `agorahub>=0.9.0`.)
   `agora.__version__` (and that the CHANGELOG has the entry) before it
   builds and publishes.
 
+- **The wire contract is now explicit.** `docs/protocol.md` opens with its
+  scope and the bump policy (additive changes ship without a bump; breaking
+  changes move `agora/0.3` → `agora/0.4`). The version handshake is real:
+  the client warns once when the hub advertises a different protocol, and
+  `agora chat` flags the mismatch at login. The ledger's canonicalization is
+  specified byte-exactly and `GET /channels/{c}/ledger` now serves every
+  hashed field (`urgency`, `critical`, `downgraded`, `to` were missing), so
+  third parties can verify a transcript without reading our source —
+  `scripts/verify_ledger.py` is a stdlib-only verifier written from the
+  document alone. Each GitHub Release attaches `openapi.json`, the generated
+  (descriptive, not normative) API document of exactly that release.
+
 - **Situation summaries via an OpenAI-compatible endpoint.** Configure one
   once — `agora llm --base-url URL --model NAME [--api-key KEY]` (local,
   `0600` in `~/.agora/config.json`; never sent to the hub) — then `agora

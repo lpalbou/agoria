@@ -1,0 +1,142 @@
+"""The standalone ledger verifier must verify a real hub transcript from the
+ledger response alone (docs/protocol.md canonicalization, rules 1-4), and
+catch tampering. This is the spec's proof-of-sufficiency: the script imports
+nothing from agora, so if these tests pass, the documented rules — not the
+implementation — are what verified the chain."""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+import sys
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+
+from agora.hub.app import create_app
+
+ADMIN_KEY = "test-admin"
+
+# Import scripts/verify_ledger.py as a module without packaging it.
+_spec = importlib.util.spec_from_file_location(
+    "verify_ledger", Path(__file__).parent.parent / "scripts" / "verify_ledger.py")
+verify_ledger = importlib.util.module_from_spec(_spec)
+sys.modules["verify_ledger"] = verify_ledger
+_spec.loader.exec_module(verify_ledger)
+
+
+@pytest.fixture()
+def client() -> TestClient:
+    app = create_app(db_path=":memory:", admin_key=ADMIN_KEY, rate_per_minute=600.0)
+    return TestClient(app)
+
+
+def _register(client: TestClient, agent_id: str) -> str:
+    r = client.post("/agents", headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+                    json={"id": agent_id, "about": ""})
+    assert r.status_code == 200
+    return r.json()["api_key"]
+
+
+def _auth(key: str) -> dict:
+    return {"Authorization": f"Bearer {key}"}
+
+
+def _make_transcript(client: TestClient) -> tuple[str, dict]:
+    """A channel exercising every canonicalization hazard: unicode (escaping),
+    nested unordered data (recursive key sorting), floats in data (shortest
+    round-trip), addressing + criticality (the fields the old ledger response
+    omitted), and a reply chain."""
+    key = _register(client, "alice")
+    key_b = _register(client, "bob")
+    client.post("/channels", headers=_auth(key), json={"name": "verbatim"})
+    invite = client.post("/channels/verbatim/invites", headers=_auth(key),
+                         json={"agent_id": "bob"})
+    assert invite.status_code == 200
+    joined = client.post("/channels/verbatim/join", headers=_auth(key_b),
+                         json={"invite_token": invite.json()["invite_token"]})
+    assert joined.status_code == 200
+
+    first = client.post("/channels/verbatim/messages", headers=_auth(key), json={
+        "title": "unicode — émojis 🦉 and «quotes»",
+        "body": "café \u00e9\u0301 mixed\nnewline", "status": "open",
+        "to": ["bob"],
+        "data": {"z_last": {"b": 2, "a": 1}, "pi": 3.141592653589793,
+                 "neg": -0.5, "big": 1752430471.123456, "n": None,
+                 "arr": [1, "two", {"y": 0, "x": 1}]},
+    })
+    assert first.status_code == 200
+    first_id = first.json()["id"]
+    r = client.post("/channels/verbatim/messages", headers=_auth(key_b), json={
+        "title": "reply", "body": "plain ascii", "status": "reply",
+        "reply_to": first_id,
+    })
+    assert r.status_code == 200
+    ledger = client.get("/channels/verbatim/ledger", headers=_auth(key)).json()
+    return key, ledger
+
+
+def test_standalone_verifier_confirms_a_real_transcript(client):
+    _, ledger = _make_transcript(client)
+    assert ledger["verified"] is True                    # hub's own view
+    result = verify_ledger.verify(ledger)                # independent recompute
+    assert result["ok"] is True
+    assert result["broken_at"] is None
+    # system turns (channel created / member joined) are chained too
+    assert result["hashed"] == len(ledger["turns"]) >= 2
+    assert result["computed_head"] == ledger["head"]
+
+    # The response itself must carry every hashed field (a verifier cannot
+    # invent urgency/critical/downgraded/to) with hash-time types.
+    mine = next(t for t in ledger["turns"] if t["sender"] == "alice")
+    for field in ("urgency", "critical", "downgraded", "to"):
+        assert field in mine
+    assert mine["critical"] in (0, 1) and mine["downgraded"] in (0, 1)
+    assert mine["to"] == ["bob"]
+
+
+def test_verifier_detects_tampering_and_names_the_seq(client):
+    _, ledger = _make_transcript(client)
+    edited = next(i for i, t in enumerate(ledger["turns"]) if t["sender"] == "alice")
+    tampered = json.loads(json.dumps(ledger))
+    tampered["turns"][edited]["body"] = "café \u00e9\u0301 mixed\nnewline (edited)"
+    result = verify_ledger.verify(tampered)
+    assert result["ok"] is False
+    assert result["broken_at"] == tampered["turns"][edited]["seq"]
+
+    # A recomputed-but-unanchored rewrite: fixing the edited turn's hash still
+    # breaks at the next turn (its prev no longer matches) — the doc's
+    # "wholesale rewrite needs every subsequent hash AND changes the head".
+    rehashed = json.loads(json.dumps(tampered))
+    prev = rehashed["turns"][edited - 1]["hash"] if edited else ""
+    rehashed["turns"][edited]["hash"] = verify_ledger.turn_hash(
+        prev, rehashed["turns"][edited], rehashed["channel"])
+    result = verify_ledger.verify(rehashed)
+    assert result["ok"] is False
+    assert result["broken_at"] == rehashed["turns"][edited + 1]["seq"]
+
+
+def test_verifier_head_mismatch_is_caught(client):
+    _, ledger = _make_transcript(client)
+    forged = json.loads(json.dumps(ledger))
+    forged["head"] = "0" * 64
+    result = verify_ledger.verify(forged)
+    assert result["ok"] is False and result["broken_at"] is None
+    assert result["head_ok"] is False
+
+
+def test_verifier_cli_exit_codes(client, tmp_path, capsys):
+    _, ledger = _make_transcript(client)
+    good = tmp_path / "ledger.json"
+    good.write_text(json.dumps(ledger))
+    assert verify_ledger.main([str(good)]) == 0
+    assert "INTACT" in capsys.readouterr().out
+
+    ledger["turns"][1]["title"] = "edited"
+    bad = tmp_path / "tampered.json"
+    bad.write_text(json.dumps(ledger))
+    assert verify_ledger.main([str(bad)]) == 1
+    assert "TAMPERED" in capsys.readouterr().out
+
+    assert verify_ledger.main([str(tmp_path / "missing.json")]) == 2

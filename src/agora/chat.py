@@ -964,8 +964,15 @@ class ChatApp:
         role = s.yellow(" · operator") if operator else ""
         # Show the running hub's version + wire protocol at login, so it is
         # obvious what you are connected to (single source: agora.__version__).
+        # A protocol mismatch is flagged inline instead of hidden in a warning.
+        from . import PROTOCOL_VERSION
         ver = me.get("version")
-        ver_s = s.dim(f"  hub v{ver} ({me.get('protocol', '')})") if ver else ""
+        proto = me.get("protocol", "")
+        if proto and proto != PROTOCOL_VERSION:
+            proto_s = s.yellow(f"{proto} ≠ client {PROTOCOL_VERSION} — upgrade one side")
+            ver_s = s.dim(f"  hub v{ver} (") + proto_s + s.dim(")") if ver else ""
+        else:
+            ver_s = s.dim(f"  hub v{ver} ({proto})") if ver else ""
         self._print(f" {s.bold('agora chat')} — {s.sender(self.me)}{role}{ver_s}")
         self._print(s.cyan("═" * width))
         self._print(_render_channel_table(

@@ -18,11 +18,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import warnings
 from typing import Any
 
 import httpx
 import websockets
 
+from .. import PROTOCOL_VERSION
 from ..models import Envelope, Message, PostMessage, Status, Urgency
 from .inbox import Inbox
 
@@ -45,11 +47,31 @@ class AgoraClient:
         self._desired: set[str] = set()       # channels to (re)subscribe on reconnect
         self._subscribed: set[str] = set()
         self._closing = False
+        self.hub_protocol: str | None = None  # advertised by /whoami, set on first call
+        self._protocol_warned = False
 
     # -- control plane (REST) ---------------------------------------------------
 
     async def whoami(self) -> dict[str, Any]:
-        return self._json(await self._http.get("/whoami"))
+        info = self._json(await self._http.get("/whoami"))
+        self._check_protocol(info.get("protocol"))
+        return info
+
+    def _check_protocol(self, hub_protocol: Any) -> None:
+        """The version handshake, made real: warn (once per client) when the
+        hub speaks a different `agora/X.Y` than this client was built for.
+        A warning, not a refusal — skew is expected mid-upgrade, and additive
+        changes never bump the string (see docs/protocol.md, Scope)."""
+        self.hub_protocol = hub_protocol or None
+        if self._protocol_warned or not hub_protocol:
+            return
+        if hub_protocol != PROTOCOL_VERSION:
+            self._protocol_warned = True
+            warnings.warn(
+                f"hub speaks {hub_protocol} but this client speaks "
+                f"{PROTOCOL_VERSION}; field semantics may differ — upgrade "
+                "the older side (pip install -U agorahub)",
+                RuntimeWarning, stacklevel=3)
 
     async def board(self) -> dict[str, Any]:
         """The caller's decision board (pending-on-me / queue / proposals /

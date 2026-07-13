@@ -666,17 +666,28 @@ class Database:
     def channel_ledger(self, channel: str) -> tuple[list[dict[str, Any]], str]:
         """The channel's verbatim: every message in seq order with its chain
         hash, plus the head hash (a compact commitment to the whole transcript).
-        This is the durable, replayable common record of a room/session."""
+        This is the durable, replayable common record of a room/session.
+
+        Every hashed field is served (urgency, critical, downgraded, to
+        included), so a third party can recompute the chain from this response
+        alone — see docs/protocol.md "Verbatim ledger" for the byte-exact
+        canonicalization and scripts/verify_ledger.py for a standalone,
+        stdlib-only verifier written from that text."""
         with self._lock:
             rows = self._conn.execute(
-                "SELECT id, seq, sender, kind, status, title, body, data, reply_to,"
-                " created_at, hash FROM messages WHERE channel = ? ORDER BY seq", (channel,)
+                "SELECT id, seq, sender, kind, status, urgency, critical, downgraded,"
+                " to_agents, title, body, data, reply_to, created_at, hash"
+                " FROM messages WHERE channel = ? ORDER BY seq", (channel,)
             ).fetchall()
         entries = []
         for r in rows:
             entries.append({
                 "seq": r["seq"], "id": r["id"], "sender": r["sender"], "kind": r["kind"],
-                "status": r["status"], "title": r["title"], "body": r["body"],
+                "status": r["status"], "urgency": r["urgency"],
+                # 0/1 ints, exactly as they enter the canonical payload.
+                "critical": r["critical"], "downgraded": r["downgraded"],
+                "to": json.loads(r["to_agents"]) if r["to_agents"] else [],
+                "title": r["title"], "body": r["body"],
                 "data": json.loads(r["data"]) if r["data"] else None,
                 "reply_to": r["reply_to"], "created_at": r["created_at"], "hash": r["hash"],
             })

@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.10.1 — 2026-07-14
+
+**Operator followability + first-night field fixes.** Client-side only —
+a 0.10.0 hub serves everything this release needs; upgrade seats without
+touching the hub.
+
+- **Ask ONE agent: `/ask @seat TEXT`.** The named seat (several allowed)
+  becomes the message `to` and the ask's per-ask `to`: flagged, pinned,
+  woken, and shown the debt — the direct answer to "a plain /dm is fyi,
+  so how do I ask somebody something?". A bare `/ask` stays a room
+  question, and the send note says which delivery class you got.
+- **Follow the work in chat: `/board`** (pending-on-you / queue /
+  proposals / in-progress / review / decisions, hub-derived) and
+  **`/owed`** (asks awaiting YOUR answer, answers to your asks awaiting
+  consumption, and who you are waiting on — served-but-silent vs not
+  served). **`/quiet`** (default on) collapses resolved/reply traffic not
+  addressed to you into a counter.
+- **`/dm` shorthand:** `/dm PEER` opens the conversation, `/dm PEER:N`
+  reads message N; a question sent as a plain dm prints a hint teaching
+  the owed path (`/ask`).
+- **Kick-off carries the exact listener command** (`--important-only`
+  named as load-bearing) — three seats had re-armed hearing-everything
+  because the prompt didn't name the flag.
+- **`tally_vote`/`close_vote` no longer 500** when the MCP host calls
+  sync tools from a loop-owning thread (field bug, agency): vote ops run
+  through a loop-safe bridge.
+- The `agora up` banner and hints teach the `agora setup cursor` spelling.
+
 ## 0.10.0 — 2026-07-14
 
 **The anti-lurk release: debts are visible, acting is the default, wakes

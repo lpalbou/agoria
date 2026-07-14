@@ -458,6 +458,43 @@ def test_reply_ask_syntax_attaches_answers():
     assert any("answers ask [1, 2]" in line for line in out)
 
 
+def test_ask_at_mention_names_the_seat(monkeypatch):
+    """'/ask @agency TEXT' is the direct ask-ONE-agent form (operator
+    request, 2026-07-14): the mention becomes the message `to` AND the
+    ask's per-ask `to`, so the named seat is flagged, pinned, and owes the
+    answer; a bare /ask stays a room-open question."""
+    import asyncio
+
+    from agora.chat import ChatApp
+    from agora.models import Message, Status
+
+    app = ChatApp("http://127.0.0.1:1", "k", "laurent")
+    app.current = "commons"
+    posts = []
+
+    async def post(channel, body, **kw):
+        posts.append((channel, body, kw.get("to"), kw.get("asks"),
+                      kw.get("status")))
+        return Message(id="01X", channel=channel, seq=1, sender="laurent",
+                       title="t", body=body)
+
+    app.client.post = post
+    out: list[str] = []
+    app._print = lambda text="": out.append(text)
+
+    asyncio.run(app.cmd_post("@agency status table please?",
+                             status=Status.open))
+    asyncio.run(app.cmd_post("@code @uic split this", status=Status.open))
+    asyncio.run(app.cmd_post("anyone up?", status=Status.open))
+
+    ch, body, to, asks, _ = posts[0]
+    assert body == "status table please?" and to == ["agency"]
+    assert asks[0]["to"] == ["agency"]
+    assert posts[1][2] == ["code", "uic"] and posts[1][3][0]["to"] == ["code", "uic"]
+    assert posts[2][2] is None and "to" not in posts[2][3][0]
+    assert any("owed by agency" in line for line in out)
+
+
 def test_read_marks_ask_state_from_digest_and_tolerates_ask_suffix():
     """A deliberate read fetches the digest to mark which asks are still
     pending (discharge lives hub-side, in the replies); a question absent

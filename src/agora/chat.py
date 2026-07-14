@@ -110,6 +110,9 @@ CTRL_C_QUIT_WINDOW = 2.0
 HELP = """\
 plain text          post to the current channel (status=fyi, no obligation)
 /ask TEXT           post an open question (creates an obligation, escalates)
+/ask @seat TEXT     ask ONE agent specifically: the named seat is flagged,
+                    pinned, and owes the answer (several @seats allowed;
+                    works in channels and DMs)
 /reply REF TEXT     reply to a message (discharges its obligation, posts
                     into the referenced message's channel)
 /reply REF:N TEXT   formally answer ask N of that message (727:1 or 727:1,2
@@ -756,9 +759,26 @@ class ChatApp:
             return
         if not text:
             return
+        # `/ask @seat TEXT` — the direct "ask ONE agent" form the operator
+        # asked for (2026-07-14): leading @mentions become the ask's per-ask
+        # `to` (0077), so exactly the named seats are flagged, pinned, woken,
+        # and shown the debt. Works in channels and DMs alike.
+        named: list[str] = []
+        asks = None
+        if status == Status.open:
+            words = text.split()
+            while words and words[0].startswith("@") and len(words[0]) > 1:
+                named.append(words.pop(0)[1:].rstrip(",:"))
+                text = " ".join(words)
+            if not text:
+                self._print("usage: /ask [@seat ...] TEXT")
+                return
+            asks = [{"id": "1", "text": derive_title(text),
+                     **({"to": named} if named else {})}]
         try:
             msg = await self.client.post(self.current, text, title=derive_title(text),
-                                         status=status, critical=critical)
+                                         status=status, critical=critical,
+                                         to=named or None, asks=asks)
         except Exception as exc:
             self._print(self.style.red(f"post failed: {exc}"))
             return
@@ -769,6 +789,10 @@ class ChatApp:
         note = f"(sent #{msg.seq} to {self.current} as {status.value}"
         if critical:
             note += ", CRITICAL — pinned in every inbox until read"
+        elif status == Status.open and named:
+            note += f" — owed by {', '.join(named)}: flagged, pinned, escalates"
+        elif status == Status.open:
+            note += " — open to the room; name a seat with /ask @seat TEXT"
         elif status == Status.fyi:
             note += " — no obligation; expecting answers? use /ask"
         self._print(self.style.dim(note + ")"))

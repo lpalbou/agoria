@@ -158,6 +158,9 @@ plain text          post to the current channel (status=fyi, no obligation)
 /quiet              toggle quiet mode (default ON: resolved closes and
                     replies not addressed to you collapse to a counter —
                     they stay in /read, /history, /digest)
+/delegate AGENT --power reporting[,operational,ruling,moderation]
+                    operator: grant delegation (verifiable in whoami);
+                    /delegate AGENT --revoke lifts; /delegate lists
 /quit (/q)          leave the chat (membership persists)
 Ctrl-C              clear the input line (twice within 2s to quit)"""
 
@@ -384,7 +387,7 @@ class ChatApp:
         your own handle into every ref was pure noise (operator, 2026-07-14).
         Full `dm:a--b` names pass through untouched."""
         if name.startswith("dm:") and "--" not in name:
-            peer = name[3:]
+            peer = name[3:].lstrip("@")
             if peer and peer != self.me:
                 return f"dm:{min(peer, self.me)}--{max(peer, self.me)}"
         return name
@@ -660,6 +663,68 @@ class ChatApp:
                 return [str(a["id"]) for a in q.get("pending_asks", [])]
         return []
 
+    async def cmd_delegate(self, arg: str) -> None:
+        """Operator: `/delegate AGENT --power reporting,operational [--ttl 7d]`
+        grants delegation from inside the chat (verifiable in every whoami);
+        `/delegate AGENT --revoke` lifts it; `/delegate` lists. Uses the
+        local admin key (config.json on the hub machine) — refuses elsewhere."""
+        import httpx
+
+        from . import config as _config
+        s = self.style
+        admin = _config.load_config().get("admin_key")
+        if not admin:
+            self._print(s.red("no admin key in ~/.agora/config.json — "
+                              "delegation is the hub operator's verb"))
+            return
+        url = self.client.base_url
+        headers = {"Authorization": f"Bearer {admin}"}
+        words = arg.split()
+        try:
+            if not words:
+                r = httpx.get(f"{url}/admin/delegations", headers=headers, timeout=10)
+                rows = r.json() if r.status_code == 200 else []
+                if not rows:
+                    self._print(s.dim("no active delegations"))
+                for d in rows:
+                    until = time.strftime("%m-%d %H:%M", time.localtime(d["expires_at"]))
+                    self._print(f"  {s.sender(d['agent_id'])} "
+                                f"{'+'.join(d['powers'])} until {until}")
+                return
+            agent = words[0].lstrip("@")
+            if "--revoke" in words:
+                r = httpx.delete(f"{url}/admin/delegation/{agent}",
+                                 headers=headers, timeout=10)
+                self._print(s.dim(f"revoked {agent}" if r.status_code == 200
+                                  else f"revoke failed: {r.status_code} {r.text}"))
+                return
+            powers: list[str] = []
+            ttl = "7d"
+            for i, w in enumerate(words):
+                if w in ("--power", "--powers") and i + 1 < len(words):
+                    powers = [p.strip() for p in words[i + 1].split(",") if p.strip()]
+                if w == "--ttl" and i + 1 < len(words):
+                    ttl = words[i + 1]
+            if not powers:
+                self._print("usage: /delegate AGENT --power reporting[,operational,"
+                            "ruling,moderation] [--ttl 7d] | /delegate AGENT "
+                            "--revoke | /delegate")
+                return
+            from .join import parse_ttl
+            r = httpx.put(f"{url}/admin/delegation", headers=headers, timeout=10,
+                          json={"agent_id": agent, "powers": powers,
+                                "ttl_seconds": parse_ttl(ttl)})
+            if r.status_code != 200:
+                self._print(s.red(f"delegation failed: {r.status_code} {r.text}"))
+                return
+            d = r.json()
+            until = time.strftime("%Y-%m-%d %H:%M", time.localtime(d["expires_at"]))
+            self._print(s.dim(f"delegated: {agent} holds "
+                              f"{'+'.join(d['powers'])} until {until} — every "
+                              "agent can verify via whoami.delegations"))
+        except Exception as exc:
+            self._print(s.red(f"delegate failed: {exc}"))
+
     def cmd_quiet(self) -> None:
         """Toggle quiet mode: collapse resolved/replies not addressed to you
         into a counter (hidden traffic stays in /read, /history, /digest)."""
@@ -911,6 +976,9 @@ class ChatApp:
         path, because 'my delegate never answered' turned out to be an
         unowed fyi nobody's debt surface ever showed."""
         peer, _, text = arg.partition(" ")
+        # `@flow` and `flow` are the same seat: /ask taught the @ convention
+        # and hands type it everywhere (field 404, 2026-07-14).
+        peer = peer.lstrip("@")
         text = text.strip()
         if peer and not text:
             head, _, seq = peer.partition(":")
@@ -1101,6 +1169,7 @@ class ChatApp:
             "quiet": self.cmd_quiet,
             "owed": self.cmd_owed,
             "board": self.cmd_board,
+            "delegate": lambda: self.cmd_delegate(arg),
             "help": lambda: self._print(HELP),
         }
         handler = handlers.get(cmd)

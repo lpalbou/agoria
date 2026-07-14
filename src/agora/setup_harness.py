@@ -213,6 +213,25 @@ _WAKE_CODEX = ("Your harness has no idle wake: the stop hook drains bursts "
                "at turn ends; otherwise messages wait for your next turn — "
                "that is expected, not a fault.")
 
+# Dedicated Codex seat (no human shares the session): the ONLY reception
+# Codex has is a deliberate standing loop the seat itself holds. The live
+# 3-seat run (2026-07-14) showed the failure this text exists to prevent:
+# every seat "waited once", saw nothing, and ENDED its turn — deaf forever
+# after. The loop must be stated as the seat's job, not as a wait ban.
+_WAKE_CODEX_DEDICATED = (
+    "This is a DEDICATED seat: your standing receive loop IS your "
+    "reachability. After settling a wake, call `wait_for_messages(45)` "
+    "again. An empty wait is NORMAL — wait again, forever; do NOT end the "
+    "turn because nothing arrived. If the turn is ever ended for you "
+    "(compaction, restart), re-enter the loop as your first act.")
+
+_WAIT_CODEX_DEDICATED = (
+    "Your standing loop is the ONE sanctioned foreground wait: work, then\n"
+    "  `wait_for_messages(45)` at idle, settle what arrives (check_inbox -> DO\n"
+    "  or claim -> reply where owed -> ack_inbox), then wait again. NEVER exit\n"
+    "  the loop because waits come back empty — an exited loop is a deaf seat\n"
+    "  (the operator sees it as DARK). Only the operator ends this loop.")
+
 
 def rule_text(agent_id: str, wake: str = _WAKE_CURSOR,
               arming: str = _ARMING_CURSOR,
@@ -255,6 +274,10 @@ def kickoff_prompt(agent_id: str, url: str, *, standing_loop: bool,
             "claude": (
                 "your SessionStart hook already armed the wake — just end "
                 "your turn"),
+            "codex": (
+                "end your turn — a human shares this session, so reception "
+                "is the stop hook (if installed) and your next turn; never "
+                "run a standing wait loop here"),
         }[harness]
         return (
             f"You are {agent_id} on the agora hub ({url}); the agora MCP tools "
@@ -777,10 +800,18 @@ def codex_toml_block(mcp_command: str, url: str, agent_id: str, about: str,
         return json.dumps(s)  # JSON string quoting is valid TOML basic-string
     # Same placement rule as write_mcp_json: the env block is the only
     # credential/home channel that survives the harness's env scrub.
+    #
+    # default_tools_approval_mode: without it Codex prompts PER TOOL NAME on
+    # first use, so an unattended seat freezes on a dialog at every new verb
+    # (live 3-seat run, 2026-07-14: each seat stalled serially on whoami,
+    # list_channels, check_inbox, ... until a human clicked). The operator
+    # wiring this server IS the consent; agora tools touch the hub, not the
+    # machine.
     env = _server_env(url, agent_id, about, api_key, home)
     return (
         "[mcp_servers.agora]\n"
-        f"command = {q(mcp_command)}\n\n"
+        f"command = {q(mcp_command)}\n"
+        "default_tools_approval_mode = \"approve\"\n\n"
         "[mcp_servers.agora.env]\n"
         + "".join(f"{key} = {q(value)}\n" for key, value in env.items())
     )
@@ -812,16 +843,22 @@ def install_codex_stop_hook(workspace: Path, url: str, agent_id: str) -> list[Pa
 
 def setup_codex(workspace: Path, agent_id: str, url: str, about: str,
                 mcp_command: str, with_hook: bool = False,
-                api_key: str | None = None) -> list[Path]:
+                api_key: str | None = None,
+                dedicated: bool = False) -> list[Path]:
     """Wire a workspace as a Codex CLI agora agent via project-scoped
     `.codex/config.toml` (loaded only once the user trusts the project —
     Codex asks on first run; the command layer additionally calls
     register_codex_global so the server is visible before/without that).
     An existing agora table is left untouched — TOML surgery is not worth
-    the risk; delete the table to regenerate. The rule's wake note states
-    the idle gap honestly: no reception loop is prescribed (an interactive
-    Codex session shares a human's terminal), stop-hook drain at turn ends,
-    mailbox otherwise."""
+    the risk; delete the table to regenerate.
+
+    Default (shared session): the wake note states the idle gap honestly —
+    no reception loop is prescribed (a human shares the terminal),
+    stop-hook drain at turn ends, mailbox otherwise. `dedicated=True`
+    (setup codex --headless): the standing wait_for_messages loop IS the
+    seat's reachability, and the rule must SAY so — the generic wait ban
+    outranked the skill's loop advice in the live 3-seat run (2026-07-14)
+    and every seat waited once, ended its turn, and went deaf."""
     written: list[Path] = []
     codex_dir = workspace / ".codex"
     codex_dir.mkdir(parents=True, exist_ok=True)
@@ -837,8 +874,13 @@ def setup_codex(workspace: Path, agent_id: str, url: str, about: str,
         written.append(config_path)
 
     agents_md = workspace / "AGENTS.md"
-    upsert_marked_section(agents_md, rule_text(agent_id, wake=_WAKE_CODEX,
-                                               arming="", wait_policy=_WAIT_BAN))
+    if dedicated:
+        rule = rule_text(agent_id, wake=_WAKE_CODEX_DEDICATED, arming="",
+                         wait_policy=_WAIT_CODEX_DEDICATED)
+    else:
+        rule = rule_text(agent_id, wake=_WAKE_CODEX, arming="",
+                         wait_policy=_WAIT_BAN)
+    upsert_marked_section(agents_md, rule)
     written.append(agents_md)
     if with_hook:
         written += install_codex_stop_hook(workspace, url, agent_id)
@@ -938,6 +980,44 @@ def register_codex_global(mcp_command: str, url: str, agent_id: str,
                        + (f": {tail[-1]}" if tail else "")
                        + " — run `codex` in this folder and trust the "
                          "project when prompted")
+    _codex_global_approve_default()
     return True, ("registered with Codex globally (~/.codex/config.toml — "
                   "visible in every codex session; the project "
                   ".codex/config.toml overrides it here once trusted)")
+
+
+def _codex_global_approve_default() -> None:
+    """Insert `default_tools_approval_mode = "approve"` under the global
+    [mcp_servers.agora] table. `codex mcp add` has no flag for it and
+    rewrites the table wholesale on every run, so this patch must follow
+    every add. Without it Codex prompts per TOOL NAME on first use — an
+    unattended seat freezes on a dialog at every new verb (live 3-seat run,
+    2026-07-14). Line-based on purpose: a TOML writer dependency is not
+    worth one key, and the section layout is machine-written and stable."""
+    path = Path.home() / ".codex" / "config.toml"
+    try:
+        lines = path.read_text().splitlines(keepends=True)
+    except OSError:
+        return
+    out, in_agora, done = [], False, False
+    for line in lines:
+        stripped = line.strip()
+        if stripped == "[mcp_servers.agora]":
+            in_agora = True
+            out.append(line)
+            continue
+        if in_agora and not done:
+            if stripped.startswith("default_tools_approval_mode"):
+                done = True                      # already present, keep as-is
+            elif stripped.startswith("[") or not stripped:
+                # section ends (next table or blank): insert before it
+                out.append('default_tools_approval_mode = "approve"\n')
+                done = True
+                in_agora = False
+        out.append(line)
+    if in_agora and not done:                    # file ended inside the table
+        out.append('default_tools_approval_mode = "approve"\n')
+    try:
+        path.write_text("".join(out))
+    except OSError:
+        pass                                     # advisory patch; add already succeeded

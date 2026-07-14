@@ -188,8 +188,6 @@ def cmd_setup(args: argparse.Namespace) -> None:
         print(f"note: `agora {args.deprecated_alias}` still works but is "
               f"deprecated — prefer `agora setup {args.harness} {args.agent}` "
               "(same flags).")
-    if args.harness != "cursor" and getattr(args, "headless", False):
-        print("note: --headless applies to the cursor harness only; ignored.")
     dispatch = {"cursor": cmd_setup_cursor, "claude": cmd_setup_claude,
                 "codex": cmd_setup_codex}
     dispatch[args.harness](args)
@@ -284,10 +282,12 @@ def cmd_setup_codex(args: argparse.Namespace) -> None:
         sys.exit(f"workspace not found: {workspace}")
     url = _hub_url(args)
     api_key = _setup_key(url, args.agent, args.about or "", args.key)
+    dedicated = getattr(args, "headless", False)
     written = _sh.setup_codex(workspace, args.agent, url, args.about or "",
                               _resolve_mcp_command(), with_hook=args.with_hook,
-                              api_key=api_key)
-    print(f"configured '{workspace.name}' as agora agent '{args.agent}' (Codex CLI):")
+                              api_key=api_key, dedicated=dedicated)
+    kind = "Codex CLI, dedicated" if dedicated else "Codex CLI"
+    print(f"configured '{workspace.name}' as agora agent '{args.agent}' ({kind}):")
     for path in written:
         print(f"  wrote {path}")
     config_path = workspace / ".codex" / "config.toml"
@@ -318,9 +318,13 @@ def cmd_setup_codex(args: argparse.Namespace) -> None:
           "turn ends, otherwise messages wait for the next turn (that is "
           "expected). Harnesses with a wake surface use `agora listen`.")
     _warn_if_not_project_root(workspace, args.agent)
-    # Codex has no event wake, so reachability needs a standing loop (only in a
-    # session no human shares — it deliberately waits).
-    _print_kickoff(args.agent, url, standing_loop=True)
+    if dedicated:
+        # The standing loop IS this seat's reachability; the kickoff says so.
+        _print_kickoff(args.agent, url, standing_loop=True)
+    else:
+        # Shared session: never teach the standing loop (it freezes the
+        # human's terminal); reception is stop-hook drain + next turn.
+        _print_kickoff(args.agent, url, standing_loop=False, harness="codex")
 
 
 def _warn_if_not_project_root(workspace: Path, agent_id: str) -> None:
@@ -1304,7 +1308,7 @@ def build_parser() -> argparse.ArgumentParser:
                  "local key cache and is embedded in the harness config — the "
                  "admin key is then never needed on this machine")
 
-    def _setup_common_args(sp, *, headless: bool) -> None:
+    def _setup_common_args(sp, *, headless_help: str | None) -> None:
         """The flags shared by every harness setup (one definition — the
         `--with-hooks` lesson: per-harness copies drift)."""
         sp.add_argument("agent", help="agent id, e.g. runtime")
@@ -1318,12 +1322,21 @@ def build_parser() -> argparse.ArgumentParser:
                         help="also install the turn-end stop hook (a backstop "
                              "that re-prompts if reception breaks). Default: "
                              "no hook.")
-        if headless:
+        if headless_help:
             sp.add_argument("--headless", action="store_true",
-                            help="dedicated Cursor seat (no human sharing the "
-                                 "tab): the background listener widens its idle "
-                                 "window to 1200s to save empty iterations. Do "
-                                 "NOT use for a human-shared tab")
+                            help=headless_help)
+
+    _HEADLESS_HELP = {
+        "cursor": ("dedicated seat, no human shares the session: wire a "
+                   "DRIVEN seat (rule forbids in-session listeners; run "
+                   "`agora drive --as <id>` as its watcher). Do NOT use "
+                   "for a human-shared tab"),
+        "claude": None,   # hooks already arm reception; no dedicated variant
+        "codex": ("dedicated seat, no human shares the session: the rule "
+                  "makes the standing wait_for_messages loop the seat's "
+                  "reachability (Codex has no idle wake). Do NOT use for "
+                  "a human-shared terminal"),
+    }
 
     st = sub.add_parser("setup",
                         help="wire a workspace as an agora agent: "
@@ -1331,14 +1344,14 @@ def build_parser() -> argparse.ArgumentParser:
     st_sub = st.add_subparsers(dest="harness", required=True)
     for h in ("cursor", "claude", "codex"):
         sp = st_sub.add_parser(h, help=f"wire this workspace for {h}")
-        _setup_common_args(sp, headless=(h == "cursor"))
+        _setup_common_args(sp, headless_help=_HEADLESS_HELP[h])
         sp.set_defaults(func=cmd_setup, harness=h)
 
     # Deprecated aliases (one release, per the simplicity audit): same flags,
     # same handlers, a one-line nudge toward `agora setup <harness>`.
     for h in ("cursor", "claude", "codex"):
         alias = sub.add_parser(f"setup-{h}")
-        _setup_common_args(alias, headless=(h == "cursor"))
+        _setup_common_args(alias, headless_help=_HEADLESS_HELP[h])
         alias.set_defaults(func=cmd_setup, harness=h,
                            deprecated_alias=f"setup-{h}")
 

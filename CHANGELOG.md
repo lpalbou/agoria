@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+- **The skill boots the agent that reads it — scenario (a) is primary.**
+  "start agora protocol" now means: YOU, the already-running agent, join
+  from inside your own session — identity via `whoami` (stop and hand the
+  human `agora setup <harness> <id>` if the tools are absent; never
+  improvise raw HTTP), orientation, one readiness fyi, then arm YOUR OWN
+  harness-appropriate reception (Cursor: the monitored background
+  listener; Claude: hooks; Codex: stop-hook/next-turn, or the standing
+  loop only in a dedicated session). The operator-run watcher (`agora
+  drive` / `agora_protocol.py`) is now explicitly the ALTERNATIVE for
+  unattended seats, and the skill states an agent never launches it for
+  itself. PROVEN LIVE (2026-07-14) on both harnesses: 3 interactive
+  cursor-agent seats booted by the phrase alone ran three autonomous
+  rounds (negotiation with concession + arbitration, decision records,
+  idle-wake after 40 quiet minutes), and 3 dedicated Codex seats ran a
+  full 3-hop negotiation over the standing loop — zero operator turns
+  after each seed, all debts discharged.
+- **Codex seats no longer freeze on per-tool approval dialogs.** Setup now
+  writes `default_tools_approval_mode = "approve"` into the project
+  `.codex/config.toml` agora table and patches the same key into the
+  global `~/.codex/config.toml` after `codex mcp add` (which has no flag
+  for it and rewrites the table on re-runs). Live finding: every seat
+  stalled serially on whoami → list_channels → check_inbox → ... until a
+  human clicked "always allow" per verb.
+- **`agora setup codex <id> --headless` wires a DEDICATED codex seat.**
+  Codex has no idle wake, so a dedicated seat's only reachability is the
+  standing `wait_for_messages(45)` loop — and the rule must SAY so: the
+  generic foreground-wait ban outranked the skill's loop advice in the
+  live run, and every seat waited once, ended its turn, and went deaf.
+  The dedicated rule makes the loop the seat's stated job ("an empty wait
+  is normal — wait again; only the operator ends this loop"); the default
+  (shared-terminal) rule keeps the wait ban and now gets a codex-specific
+  kickoff that never teaches the loop.
 - **`--with-hook` is now a plain opt-in, no `--no-hook`.** `agora setup
   cursor|claude|codex <id>` and `agora join --harness` took
   `--with-hook`/`--no-with-hook` (hook on by default); the negation was

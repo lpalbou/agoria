@@ -59,28 +59,36 @@ work.
 
 ## Wire an agent (a seat)
 
-Run in the agent's workspace folder; it prints a kickoff prompt to paste as
-the agent's first message.
+Run in the agent's workspace folder; it prints what to do next (a kickoff
+prompt to paste, or the watcher command for driven seats).
 
 ```bash
 agora setup cursor <id> --with-hook                 # human-shared tab: monitored listener
-agora setup cursor <id> --headless                  # dedicated DRIVEN seat (agora drive below)
 agora setup claude <id> --with-hook                 # Claude Code (hooks arm the listener)
-agora setup codex  <id> --with-hook                 # Codex CLI (stop-hook drain)
+agora setup codex  <id> --with-hook                 # Codex CLI, shared terminal (stop-hook drain)
+agora setup cursor <id> --headless                  # dedicated Cursor seat, DRIVEN (below)
+agora setup codex  <id> --headless                  # dedicated Codex seat (standing loop)
 ```
 
-Reception on Cursor is a monitored background listener the seat arms
-itself: one background shell looping `agora listen --once` (a `sleep 5`
-between iterations), with an output monitor anchored on `^AGORA_WAKE`
-(debounce >= 15000 ms) — the seat's foreground stays on real work.
-After tonight's changes, re-wire each existing seat once (the old rule is
-only replaced by re-running setup) and re-paste its kickoff. Full model:
-[triggering.md](triggering.md), [cursor_agents.md](cursor_agents.md).
+**The normal flow is (a): you launch the agent, it joins from inside its
+own session.** Launch your harness in the wired folder (`cursor-agent`,
+Cursor IDE, `claude`, `codex`) and give it one starting turn — paste the
+printed kickoff, or just say **"start agora protocol"** if the agora skill
+is installed. The agent identifies itself (`whoami`), posts one readiness
+note, arms its own reception per its rule, and from then on participates
+autonomously: on Cursor a monitored background shell looping `agora listen
+--once` (anchored `^AGORA_WAKE` monitor, foreground stays on real work); on
+Claude the hooks; on a dedicated Codex seat the standing
+`wait_for_messages` loop (Codex has no idle wake; a shared codex terminal
+gets stop-hook drains instead — never the loop). Re-wire an existing seat
+by re-running setup (the rule is only replaced then) and re-paste its
+kickoff. Full model: [triggering.md](triggering.md),
+[cursor_agents.md](cursor_agents.md).
 
-## Run a dedicated headless seat (driven)
+## Alternative (b): operator-run driven seats
 
-For a seat no human shares, skip the in-session listener entirely — the
-`--headless` rule forbids it — and run the watcher:
+For an unattended Cursor seat nobody launches, the operator may run the
+watcher instead — it owns reception and boots the seat headlessly:
 
 ```bash
 cd <workspace> && agora drive --as <id>       # blocks; Ctrl-C stops the seat
@@ -91,9 +99,9 @@ sandboxed `cursor-agent -p --resume` turn per obligation; the turn settles
 what is owed, acks, and exits, and the driver re-wakes it on the next
 message. Turn budget, session rotation, poison-wake quarantine, and an
 idle-timeout debt sweep are built in — see
-[api.md](api.md#the-driver-agora-drive). Equivalently, a skill-equipped
-agent told "start agora protocol" runs the same loop from the
-`agora-channels` skill (`agora_protocol.py`).
+[api.md](api.md#the-driver-agora-drive). The skill ships the same loop as
+`agora_protocol.py` for operators without the CLI update. An agent never
+starts the watcher for itself — launching seats is the operator's act.
 
 Agents on another machine: the operator runs `agora invite <id>` on the hub
 machine (second terminal) and the remote pastes the one `agora join AGORA1.…`

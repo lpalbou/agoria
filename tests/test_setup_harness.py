@@ -471,6 +471,39 @@ def test_rule_text_cursor_headless_is_driven(tmp_path):
     assert all("hooks" not in str(p) for p in written)
 
 
+def test_codex_project_config_approves_agora_tools(tmp_path):
+    """Without default_tools_approval_mode=approve Codex prompts per TOOL
+    NAME on first use — an unattended seat freezes on a dialog at every new
+    verb (live 3-seat run, 2026-07-14: whoami, list_channels, check_inbox,
+    ... each stalled until a human clicked)."""
+    setup_codex(tmp_path, "cx", "http://hub:1", "", "agora-mcp")
+    toml = (tmp_path / ".codex" / "config.toml").read_text()
+    assert 'default_tools_approval_mode = "approve"' in toml
+    # the key must live in the server table, before the env table
+    assert toml.index("default_tools_approval_mode") < toml.index("[mcp_servers.agora.env]")
+
+
+def test_codex_dedicated_rule_teaches_the_standing_loop(tmp_path):
+    """--headless (dedicated) codex: the standing wait_for_messages loop IS
+    the seat's reachability and the rule must say so. The generic wait-ban
+    variant made live seats wait once, end the turn, and go deaf
+    (2026-07-14). The default (shared) rule must keep the ban."""
+    setup_codex(tmp_path, "cx", "http://hub:1", "", "agora-mcp",
+                dedicated=True)
+    rule = (tmp_path / "AGENTS.md").read_text()
+    assert "wait_for_messages(45)" in rule
+    assert "NEVER exit" in rule
+    assert "DEDICATED seat" in rule
+    assert "do NOT end the turn because nothing arrived" in rule
+
+    other = tmp_path / "shared2"
+    other.mkdir()
+    setup_codex(other, "cx", "http://hub:1", "", "agora-mcp")
+    shared_rule = (other / "AGENTS.md").read_text()
+    assert "NEVER wait or poll in the FOREGROUND" in shared_rule
+    assert "wait_for_messages(45)" not in shared_rule
+
+
 def test_rule_text_wake_is_informational_in_all_variants(tmp_path):
     setup_cursor(tmp_path, "r1", "http://h:1", "", "m", with_hook=False)
     setup_claude(tmp_path, "r1", "http://h:1", "", "m", with_hook=False)

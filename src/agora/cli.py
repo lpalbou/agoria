@@ -38,6 +38,38 @@ def _resolve_mcp_command() -> str:
     return "agora-mcp"
 
 
+def _smoke_check_mcp(mcp_command: str) -> None:
+    """Prove the agora-mcp we are about to WIRE actually starts, at setup
+    time. Field root-cause (2026-07-14): a workspace mcp.json pointed at a
+    binary whose venv lacked the `mcp` extra — every agent in that fleet
+    booted TOOLLESS and improvised with the CLI against the wrong hub, and
+    nothing said so until live-run forensics. The failure belongs HERE,
+    loud, with the fix in hand. Import check only (no hub, no key needed):
+    `import mcp` failing is exactly the broken-extra signature."""
+    import subprocess
+    probe = ("import importlib.util, sys; "
+             "sys.exit(0 if importlib.util.find_spec('mcp') else 3)")
+    try:
+        if mcp_command.endswith("agora-mcp") and Path(mcp_command).exists():
+            # Run the probe under the ENTRY POINT's own interpreter (its
+            # shebang venv), which is what will matter at connect time.
+            shebang = Path(mcp_command).read_text().splitlines()[0]
+            python = shebang[2:].strip() if shebang.startswith("#!") else sys.executable
+            rc = subprocess.run([python, "-c", probe], timeout=15,
+                                capture_output=True).returncode
+        else:
+            return  # bare name on PATH of the future harness: nothing to probe here
+    except Exception:
+        return  # a probe failure must never block setup; connect-time will tell
+    if rc == 3:
+        print(f"WARNING: {mcp_command} cannot start — its environment lacks "
+              "the MCP SDK, so agents in this workspace would boot WITHOUT "
+              "agora tools. Fix now: reinstall with the extra, e.g. "
+              "`uv tool install \"agorahub[mcp]\"` (dev checkout: "
+              "`uv sync --extra mcp`), then re-run this setup.",
+              file=sys.stderr)
+
+
 def _apply_home(args: argparse.Namespace) -> None:
     """`--home PATH` = use this agora home for THIS invocation. It maps onto
     AGORA_HOME (what config.home() and every spawned process — MCP server,
@@ -176,15 +208,28 @@ def cmd_setup_cursor(args: argparse.Namespace) -> None:
     url = _hub_url(args)  # honors $AGORA_URL (the silent-127.0.0.1 trap fix)
     api_key = _setup_key(url, args.agent, args.about or "", args.key)
     headless = getattr(args, "headless", False)
+    mcp_command = _resolve_mcp_command()
+    _smoke_check_mcp(mcp_command)
     written = setup_cursor(workspace, args.agent, url, args.about or "",
-                           _resolve_mcp_command(), args.with_hook,
+                           mcp_command, args.with_hook,
                            api_key=api_key, headless=headless)
-    kind = "Cursor, headless" if headless else "Cursor"
+    kind = "Cursor, driven" if headless else "Cursor"
     print(f"configured '{workspace.name}' as agora agent '{args.agent}' ({kind}):")
     for path in written:
         print(f"  wrote {path}")
     if api_key:
         _print_key_placement(written[0])
+    if headless:
+        # A driven seat needs no kickoff paste and no open window: the
+        # watcher boots it headlessly and re-wakes it per obligation.
+        print("\nThis seat is DRIVEN: start its watcher from this workspace "
+              "(it blocks; keep it running, Ctrl-C to stop):\n"
+              f"  cd {workspace} && agora drive --as {args.agent}\n"
+              "Driven turns run sandboxed (--sandbox enabled) and yield by "
+              "exiting; the watcher re-wakes the seat when a message lands.")
+        _warn_if_not_project_root(workspace, args.agent)
+        return
+    if api_key:
         print("Open this folder in Cursor. The agent authenticates immediately.")
     else:
         print("Open this folder in Cursor. The agent self-registers on first tool use.")

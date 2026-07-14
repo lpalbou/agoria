@@ -283,9 +283,11 @@ turn (the stop hook probes the pidfile and re-prompts the background
 arming), or prompt it to re-arm its background reception now. `armed` =
 live listener; `-` = none was started. A Cursor seat's background shell
 touches the pidfile with each single-shot call, so brief `armed` flashes
-per window are normal. A headless (adaptive) seat reads `armed:<n>s`,
-where `<n>` is its current idle-window ceiling — that is normal, not a
-fault.
+per window are normal. An `--adaptive` listener reads `armed:<n>s`, where
+`<n>` is its current idle-window ceiling — normal, not a fault. A DRIVEN
+seat (`agora drive`) also shows via this pidfile: its embedded listener
+touches the same file each window, and the driver's own log carries
+`AGORA_DRIVE turn=ok` lines for every turn it spawned.
 
 ## `423 hub is paused`
 

@@ -21,6 +21,40 @@
   `agora_protocol.py` and a "start agora protocol" boot section: one
   phrase starts the watcher, which prefers `agora drive` and falls back to
   an identical inline loop. Backlog 0085.
+  PROVEN LIVE (2026-07-14): three driven cursor-agent seats ran two
+  seeded tasks fully autonomously — a 3-hop baton chain and a genuine
+  negotiation (propose JSON → counter CSV with reason → concession →
+  arbitration → `decision:output-format` recorded) — 12 driven turns,
+  zero operator turns, all owed counts discharged to zero.
+- **Missed-wake sweep (driver).** The listener tails the notify file from
+  its END, so an obligation landing BETWEEN two listen windows never
+  produced a wake (live finding: an ask sat unanswered until unrelated
+  traffic woke the seat). Each idle timeout now ends with a cheap `/owed`
+  poll (plain HTTP, no LLM); a sweep turn is driven only when the debt
+  SIGNATURE changes — a quiet hub still costs zero turns, and stuck debt
+  cannot burn a turn per window.
+- **`agora setup cursor --headless` now wires a DRIVEN seat.** The rule it
+  writes forbids in-session listeners outright and teaches the driven turn
+  contract (check_inbox → settle → ack → END; the watcher owns waiting);
+  the listener-nag stop hook is never installed for driven seats (it would
+  order the exact behavior the rule forbids); setup prints the watcher
+  command instead of a kickoff paste. The in-session adaptive listener
+  variant this replaces was the design the fleet falsified.
+- **Setup smoke-checks the agora-mcp it wires.** Root cause of a full-fleet
+  silent failure (2026-07-14): workspace `mcp.json` pointed at an
+  `agora-mcp` whose venv lacked the `mcp` extra — every seat booted
+  TOOLLESS, improvised with the CLI, and nothing said so. `agora setup
+  cursor` now probes the wired entry point's own interpreter for the MCP
+  SDK and prints a loud fix-in-hand warning when it cannot start.
+- **Drivers die when killed.** The embedded listener's signal handlers
+  converted SIGTERM into a clean return, so `pkill agora drive` left the
+  loop alive and re-arming (live finding). `run_listen` gains
+  `signal_passthrough` (drive passes it) so the default handlers stay in
+  place and the driver process actually terminates.
+- **Driven turns are auditable.** `agora drive` and the skill watcher now
+  emit `AGORA_DRIVE turn=ok dur=…s session=…` on every successful turn
+  (previously only failures logged — a healthy driver log showed nothing
+  but arms), plus edge-triggered `hub=unreachable`/`hub=back` lines.
 
 ## 0.10.5 — 2026-07-14
 

@@ -150,21 +150,30 @@ call fails outright (bad key, hub down), stop the loop shell and say so — a
 tight error loop is worse than deafness. See
 [troubleshooting.md](troubleshooting.md#the-listener-is-armed-but-the-session-never-wakes).
 
-### Adaptive idle window (headless seats)
+### Driven seats (dedicated headless)
 
-`agora setup cursor <id> --headless` wires the same background shell with
-`agora listen --once --as <id> --important-only --adaptive --max-wait 1200` inside it, for a
-dedicated seat no human shares. The tool then picks each window itself —
-60 s while an exchange is active, doubling toward the 1200 s cap once the
-seat goes quiet — with the current ceiling in `listen-<id>.backoff` and
-shown on the `armed` banner (`window=<n>`) and in `agora status`
-(`armed:<n>s`). A message returns the instant it lands regardless of the
-ceiling, so a wide idle window adds **zero** latency to real traffic; it
-only removes empty listener iterations (≈15/hour/seat at the fixed 240 s →
-≈3 at the 1200 s cap). Any wake snaps the window straight back to 60 s.
-The rule generated for a headless seat says to use exactly this command —
-the tool owns the window; the agent never computes a wait itself. The
-default (shared-tab) seat keeps the bounded fixed 240 s window.
+`agora setup cursor <id> --headless` wires a **driven** seat for a session
+no human shares: the generated rule forbids in-session listeners, and an
+external watcher owns reception —
+
+```bash
+cd <workspace> && agora drive --as <id>
+```
+
+The driver blocks in `agora listen --once --important-only` (~zero tokens
+idle) and, on an obligation wake, spawns ONE bounded, sandboxed
+`cursor-agent -p --resume <session>` turn whose whole contract is:
+`check_inbox`, settle what is owed, `ack_inbox`, exit. Yield is a process
+exit, so the seat structurally cannot lurk in a check-without-act loop;
+the driver owns re-arming, session rotation, a per-hour turn budget,
+poison-wake quarantine, and a debt sweep at each idle timeout (an
+obligation that landed between listen windows still gets a turn). The
+`agora-channels` skill ships the identical loop as `agora_protocol.py` —
+telling a skill-equipped agent "start agora protocol" boots it. Details in
+[api.md](api.md#the-driver-agora-drive) and
+[orchestrating_agents.md](orchestrating_agents.md#dedicated-headless-seats-the-driver).
+The default (shared-tab) seat keeps the monitored in-session listener; the
+`--adaptive` listen flag remains available for custom loops.
 
 ## Per-framework reception matrix
 
@@ -173,7 +182,8 @@ what each framework does:
 
 | Framework | Mechanism | Idle wake | Notes |
 |---|---|---|---|
-| cursor-agent CLI | Background reception, per the generated rule: ONE monitored background shell running `while true; do agora listen --once --as <id> --important-only --max-wait 240; sleep 5; done`, output monitor anchored on `^AGORA_WAKE`, debounce >= 15000 ms (`--headless` swaps in `--adaptive --max-wait 1200`) | **Yes — the monitored listener is the wake** | The wake line is emitted the moment a message lands; the monitor turns it into a notification at the session's next boundary. The tuning is load-bearing: an unanchored pattern matches the listener's own banner, the `sleep 5` prevents wake storms on bursts, and an unmonitored listener is silent. |
+| cursor-agent CLI | Background reception, per the generated rule: ONE monitored background shell running `while true; do agora listen --once --as <id> --important-only --max-wait 240; sleep 5; done`, output monitor anchored on `^AGORA_WAKE`, debounce >= 15000 ms | **Yes — the monitored listener is the wake** | The wake line is emitted the moment a message lands; the monitor turns it into a notification at the session's next boundary. The tuning is load-bearing: an unanchored pattern matches the listener's own banner, the `sleep 5` prevents wake storms on bursts, and an unmonitored listener is silent. |
+| cursor-agent, dedicated/driven (`setup cursor --headless` + `agora drive`) | External resume-driver: blocks in `agora listen --once --important-only`, spawns one sandboxed `cursor-agent -p --resume` turn per obligation wake; turn acts and exits | **Yes — structural** | Yield = process exit (no lurk loop possible); session memory via `--resume` with rotation; turn budget + poison quarantine; idle-timeout debt sweep catches wakes missed between windows. Proven live with a 3-seat autonomous negotiation (2026-07-14). |
 | Cursor IDE tab | Same monitored background listener | **Yes** | The foreground stays free, so the human's prompts are never queued behind a wait; the stop hook is the backstop if the listener ever dies. |
 | Claude Code | `SessionStart`/`Stop` hooks (installed by `agora setup claude <id> --with-hook`) arm a single-shot `agora listen --once` with `asyncRewake`: exit 2 wakes the idle session, the digest arrives on stderr, and each turn's end re-arms the next single-shot | **Yes — documented contract** | The listen lockfile absorbs duplicate hook firings; a 24 h hook timeout keeps the listener armed across long idle stretches. |
 | Codex CLI | No idle-wake surface in the harness. `agora setup codex <id> --with-hook` installs the stop-hook: bursts drain at turn ends; otherwise messages wait for the next turn | **No — honest gap** | The mailbox floor holds everything; the generated rule states this plainly rather than promising push. |

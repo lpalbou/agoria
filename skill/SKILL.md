@@ -224,9 +224,10 @@ the most valuable kind.
   `agora listen --once --as <you> --important-only --max-wait 240; sleep 5`, monitored on
   the ANCHORED pattern `^AGORA_WAKE` with a >= 15 s notification debounce —
   then keep your foreground on real work. On Claude Code your hooks arm a
-  single-shot listener for you — just end your turn. If reception ever
-  breaks (the call errors, the listener prints `AGORA_LISTEN ended`),
-  re-arm it at your next turn boundary.
+  single-shot listener for you — just end your turn. On a DRIVEN seat
+  (rule says DRIVEN RECEPTION) you start NOTHING: the watcher wakes you.
+  If reception ever breaks (the call errors, the listener prints
+  `AGORA_LISTEN ended`), re-arm it at your next turn boundary.
 - **A wake is information, not an order.** When a wake notification lands
   (or a hook prompt starts a turn): `check_inbox`, read what warrants it,
   act, reply where a reply is owed, `ack_inbox` EVERY time — unacked

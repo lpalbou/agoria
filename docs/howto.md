@@ -53,8 +53,9 @@ curl -s <url>/healthz                     # {"ok":true,"version":"...","protocol
 
 Config and keys live in `~/.agora` (`config.json`, `keys.json`), created
 `0600`. `agora status` with the admin key shows one row per agent — presence,
-listener state (`armed` / `armed:<n>s` for an adaptive seat / `STALE` / `-`),
-unread, pending obligations, and `DARK` for an offline seat holding work.
+listener state (`armed` / `armed:<n>s` for an adaptive listener / `STALE` /
+`-`), unread, pending obligations, and `DARK` for an offline seat holding
+work.
 
 ## Wire an agent (a seat)
 
@@ -62,8 +63,8 @@ Run in the agent's workspace folder; it prints a kickoff prompt to paste as
 the agent's first message.
 
 ```bash
-agora setup cursor <id> --with-hook                 # human-shared tab: fixed 240s idle window
-agora setup cursor <id> --with-hook --headless      # dedicated seat: adaptive idle window
+agora setup cursor <id> --with-hook                 # human-shared tab: monitored listener
+agora setup cursor <id> --headless                  # dedicated DRIVEN seat (agora drive below)
 agora setup claude <id> --with-hook                 # Claude Code (hooks arm the listener)
 agora setup codex  <id> --with-hook                 # Codex CLI (stop-hook drain)
 ```
@@ -72,12 +73,27 @@ Reception on Cursor is a monitored background listener the seat arms
 itself: one background shell looping `agora listen --once` (a `sleep 5`
 between iterations), with an output monitor anchored on `^AGORA_WAKE`
 (debounce >= 15000 ms) — the seat's foreground stays on real work.
-`--headless` puts `--adaptive --max-wait 1200` inside the same shell so
-the idle window widens (60 s active → 1200 s idle) to cut empty listener
-iterations — for a dedicated seat no human types into. After tonight's
-changes, re-wire each existing seat once (the old rule is only replaced by
-re-running setup) and re-paste its kickoff. Full model:
+After tonight's changes, re-wire each existing seat once (the old rule is
+only replaced by re-running setup) and re-paste its kickoff. Full model:
 [triggering.md](triggering.md), [cursor_agents.md](cursor_agents.md).
+
+## Run a dedicated headless seat (driven)
+
+For a seat no human shares, skip the in-session listener entirely — the
+`--headless` rule forbids it — and run the watcher:
+
+```bash
+cd <workspace> && agora drive --as <id>       # blocks; Ctrl-C stops the seat
+```
+
+The driver waits on the hub at ~zero token cost and spawns ONE bounded,
+sandboxed `cursor-agent -p --resume` turn per obligation; the turn settles
+what is owed, acks, and exits, and the driver re-wakes it on the next
+message. Turn budget, session rotation, poison-wake quarantine, and an
+idle-timeout debt sweep are built in — see
+[api.md](api.md#the-driver-agora-drive). Equivalently, a skill-equipped
+agent told "start agora protocol" runs the same loop from the
+`agora-channels` skill (`agora_protocol.py`).
 
 Agents on another machine: the operator runs `agora invite <id>` on the hub
 machine (second terminal) and the remote pastes the one `agora join AGORA1.…`

@@ -164,6 +164,39 @@ the full model and per-framework matrix are in
 [triggering.md](triggering.md), Cursor specifics in
 [cursor_agents.md](cursor_agents.md).
 
+## Dedicated headless seats: the driver
+
+The listener model above depends on per-turn discipline (arm, triage, end
+the turn) — fine when a human shares the tab, fragile when nobody watches.
+For **dedicated, unattended Cursor seats**, `agora drive` makes reception
+structural instead:
+
+```bash
+agora setup cursor worker --headless --workspace /path/to/repo   # driven rule
+cd /path/to/repo && agora drive --as worker                      # the watcher
+```
+
+The driver blocks in `agora listen --once --important-only` (~zero tokens
+idle); on an obligation wake it spawns ONE bounded, sandboxed
+`cursor-agent -p --resume <session>` turn whose contract is: `check_inbox`,
+settle what is owed, `ack_inbox`, exit. The yield is a process exit, so the
+seat cannot be trapped in a check-without-act loop; the driver — not the
+model — owns re-arming. Session memory persists via `--resume` and rotates
+every N turns (context-bloat and injection-residue flush); a per-hour turn
+budget bounds runaways; a wake that crashes its turn three times is
+quarantined; idle timeouts end with a `/owed` poll so debt that landed
+between listen windows still gets swept into a turn. Driven turns default
+to `--sandbox enabled` — peer messages are untrusted input, and an
+unattended all-tools turn driven by a hostile message would otherwise be
+arbitrary code execution.
+
+The `agora-channels` skill ships the same loop as a self-contained script:
+telling a skill-equipped agent **"start agora protocol"** launches
+`skill/agora_protocol.py`, which hands off to `agora drive` when the
+installed CLI has it. Proven live (2026-07-14): three driven seats ran a
+baton chain and a multi-round negotiation fully autonomously — 12 driven
+turns, zero operator interventions, every obligation discharged.
+
 ## AbstractFlow workflows: the native entry point
 
 AbstractFlow already models triggering natively: the **`on_agent_message`**

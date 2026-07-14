@@ -548,6 +548,7 @@ def run_listen(*, agent_id: str | None = None, url: str | None = None,
                lock: str | None = None, heartbeat: float = DEFAULT_HEARTBEAT,
                poll: float = 0.5, adaptive: bool = False,
                idle_nudge: float = 0.0,  # accepted no-op since 0.10.5 (see cli)
+               signal_passthrough: bool = False,
                cwd: Path | None = None) -> int:
     aid, hub = resolve_identity(agent_id, url, Path(cwd) if cwd else Path.cwd())
     home = _config.home()
@@ -580,7 +581,12 @@ def run_listen(*, agent_id: str | None = None, url: str | None = None,
         # as early as the pidfile write must still release the lock in the
         # finally, or a crashed armer would block re-arming until the stale-pid
         # takeover notices the dead holder.
-        arm_signals()
+        # signal_passthrough: when an EMBEDDING loop (agora drive) owns the
+        # process, converting SIGTERM into a return-0 here would turn "kill
+        # the driver" into "driver survives, spawns forever" — the caller
+        # must see the signal, so we leave the default handlers in place.
+        if not signal_passthrough:
+            arm_signals()
         pid_path.write_text(str(os.getpid()))
         if src == "file":
             rc = run_file_mode(home / f"{aid}-inbox.log", aid, hub, pid_path,

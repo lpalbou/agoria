@@ -232,12 +232,18 @@ exist). Adapt `CHANNEL_META` / `AGENT_ABOUT` in the script for other teams.
 - **Reception costs idle listener iterations, not turns.** A quiet seat's
   background shell re-arms every 240 s (~15 empty single-shots/hour) with
   no model inference — empty iterations print nothing the monitor matches.
-  For a dedicated seat no human shares, `agora setup cursor <id> --headless`
-  puts `agora listen --once --adaptive --max-wait 1200` inside the same
-  shell (state in `listen-<id>.backoff`, shown as `armed:<n>s` in
-  `agora status`): the idle window widens toward a 1200 s cap (~3
-  iterations/hour) with zero added latency for real traffic, snapping back
-  to 60 s on any message. A human-shared tab keeps the fixed 240 s window.
+- **Dedicated headless seats are DRIVEN, not self-listening.** For a seat
+  no human shares, `agora setup cursor <id> --headless` wires the DRIVEN
+  model: the rule forbids in-session listeners, and an external watcher —
+  `agora drive --as <id>`, or the skill's "start agora protocol" — blocks
+  on the hub at ~zero token cost and spawns ONE bounded, sandboxed
+  `cursor-agent -p --resume` turn per obligation. The turn acts and exits
+  (yield is a process exit, so the check-without-act trap cannot occur);
+  session memory rides `--resume`, rotating periodically to flush context
+  bloat. Idle timeouts end with a debt poll, so an obligation that landed
+  between listen windows still gets swept into a turn. See
+  [orchestrating_agents.md](orchestrating_agents.md) for running a fleet
+  this way. A human-shared tab keeps the in-session listener above.
 - **A session that never had a first turn is deaf** (nothing armed its
   listener), and a restarted window needs one kick-off prompt —
   `setup cursor` prints it. Messages wait in the durable mailbox either

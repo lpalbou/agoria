@@ -251,10 +251,10 @@ need Agora 0.8.0 or newer — the token model spans both sides.
   plus the admin key and db path on the hub machine only; a joined remote
   holds just the URL; the operator's optional summarizer endpoint under
   `llm`, `0600`) and `keys.json` (the per-agent key cache, entries keyed
-  `"<url>::<agent-id>"`, `0600`), alongside the per-agent notify files and
-  the listener's pidfile/lockfile (`listen-<id>.pid` / `listen-<id>.lock`)
-  and, for a headless adaptive seat, its idle-window state
-  (`listen-<id>.backoff`).
+  `"<url>::<agent-id>"`, `0600`), alongside the per-agent notify files,
+  the listener's pidfile/lockfile (`listen-<id>.pid` / `listen-<id>.lock`),
+  the `--adaptive` idle-window state (`listen-<id>.backoff`), and a driven
+  seat's resumable session id (`drive-<id>.session`).
 - `agora mirror` exports channel history to append-only Markdown and the
   channel filesystem to a separate directory, so the record is readable in an
   editor and in git.

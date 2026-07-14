@@ -109,9 +109,6 @@ interface. Etiquette (full version: the agora SKILL):
 # Change it HERE or nowhere.
 LISTEN_CMD = ("while true; do agora listen --once --as {agent_id} "
               "--important-only --max-wait 240; sleep 5; done")
-LISTEN_CMD_HEADLESS = ("while true; do agora listen --once --as {agent_id} "
-                       "--important-only --adaptive --max-wait 1200; "
-                       "sleep 5; done")
 
 _ARMING_CURSOR = """\
 - BACKGROUND RECEPTION — arm it on your FIRST turn; reception is an
@@ -149,40 +146,47 @@ _ARMING_CURSOR = """\
   and say so; a tight error loop is worse than deafness.
 """
 
-# Headless variant (dedicated seat, no human sharing the tab): same
-# background shape, but the tool tunes the idle window itself — 60s when
-# active, widening x2 up to 1200s when idle (state in listen-<id>.backoff).
-# A message returns the instant it lands, so a wide idle window adds no
-# latency, only fewer empty listener iterations.
-_ARMING_CURSOR_HEADLESS = """\
-- BACKGROUND RECEPTION — arm it on your FIRST turn; reception is an
-  interrupt, never a posture: your foreground stays on real work.
-  1. `check_inbox`; settle what you owe; `ack_inbox`.
-  2. Start ONE background shell (Shell tool: block_until_ms 0) running:
-     `""" + LISTEN_CMD_HEADLESS + """`
-     with an output monitor on the ANCHORED pattern `^AGORA_WAKE`, debounce
-     >= 15000 ms (Shell tool: notify_on_output {{"pattern": "^AGORA_WAKE",
-     "debounce_ms": 15000}}). ALWAYS this exact command: the tool picks each
-     window itself (60s active, widening to 1200s idle — state in
-     listen-{agent_id}.backoff); NEVER compute the wait yourself. Every
-     tuning is load-bearing: an unanchored pattern matches the listener's
-     own banner, the `sleep 5` keeps a burst from storming wakes, and
-     `--important-only` wakes you for obligations, not fyi chatter.
-  3. End your turn or keep working — never park your foreground in a wait.
-     On a wake (`owed=N` counts your debts): `check_inbox` leads with them —
-     DO or claim work assigned to you, use answers to your own asks, reply
-     where owed, then `ack_inbox` what you triaged (ack clears nothing).
-     Hold ONE live claim for your own lane; progress is an evidence
-     receipt; receipts name the follow-ups the work revealed.
-  NEVER pgrep or kill agora processes (every seat's listener looks identical
-  by name). If the listen call fails outright (bad key, hub down), stop the
-  loop shell and say so — a tight error loop is worse than deafness.
+# DRIVEN variant (dedicated headless seat, no human sharing the session):
+# reception is owned by an EXTERNAL watcher (`agora drive`, or the skill's
+# "start agora protocol"), which blocks on the hub and gives the seat one
+# bounded turn per obligation. The seat itself never arms anything — the
+# yield is a process exit, so the check-without-act trap is structurally
+# impossible. This replaced the in-session adaptive listener the fleet
+# falsified (seats armed loops and then lurked, or died with their tabs).
+_ARMING_CURSOR_DRIVEN = """\
+- DRIVEN RECEPTION — an external watcher (`agora drive`, or the agora
+  skill's "start agora protocol") wakes this seat with ONE turn per
+  obligation. Reception is NOT your job: NEVER run `agora listen`, never
+  start a background shell for reception, never wait, poll, sleep, or
+  re-check for new messages — your turn ENDING is what hands control back
+  to the watcher, and the watcher re-wakes you when the next message lands.
+  On EVERY turn (boot or wake):
+  1. `check_inbox` — it leads with what you OWE.
+  2. Settle debts first: DO or claim work an ask assigns you; read and USE
+     answers to your own asks (adopt/reject on the record); reply where a
+     reply is owed.
+  3. `ack_inbox` what you triaged (ack means SEEN, never done), then END
+     your turn. Ending promptly is correct behavior, not laziness.
+  INITIATIVE: hold ONE live claim (`claim:<task>` in your home channel) —
+  the item you are advancing. Progress is an evidence receipt (commit,
+  diff, test output); no evidence yet means post blocked naming the
+  blocker. Receipts name the follow-ups the work revealed.
 """
 
 _WAKE_CURSOR = ("Your monitored background listener is your wake: it emits "
                 "one `AGORA_WAKE` line the moment a message lands, and the "
                 "monitor turns it into a notification at your next boundary. "
                 "The stop hook is the backstop if the listener ever dies.")
+
+_WAKE_DRIVEN = ("Your external watcher is your wake: it blocks on the hub "
+                "and gives you one bounded turn per obligation. Between "
+                "turns you do not exist — ending your turn IS yielding.")
+
+_WAIT_DRIVEN = (
+    "NEVER wait for messages, in any form: no `wait_for_messages`, no\n"
+    "  `agora listen`/`agora watch`, no sleep loops, no repeated inbox polls.\n"
+    "  Your watcher waits FOR you at zero cost; a turn that waits burns tokens\n"
+    "  to do the watcher's job badly. Work, settle, ack — then END your turn.")
 
 # Wait policy: the same everywhere — the foreground of a turn never waits.
 # Where an event wake exists (Claude hooks) or none exists at all (Codex),
@@ -403,7 +407,7 @@ def _hook_entry_list(config: dict, *keys: str) -> list:
 
 def stop_hook_script(url: str, agent_id: str, noop_output: str = '"{}"',
                      reprompt_key: str = "__DECISION__",
-                     check_listener: bool = False, adaptive: bool = False) -> str:
+                     check_listener: bool = False) -> str:
     """The ONE stop-hook (v3), shared by all three harnesses: instant inbox
     check (never a long-poll — a human shares the session), prompting NOW when
     a fresh seq landed, and re-prompting standing unread on exponential
@@ -446,13 +450,11 @@ def stop_hook_script(url: str, agent_id: str, noop_output: str = '"{}"',
         'def listener_dead():\n'
         '    return False\n'
     )
-    # The nag's resume command must match the seat's own rule, or every
-    # broken-listener recovery would fight the configured window (adaptive
-    # vs 240).
     # Single source (c2095 lesson): the nag renders the SAME command the
     # rule teaches — a hand-spelled copy here is how surfaces drift apart.
-    resume_cmd = (LISTEN_CMD_HEADLESS if adaptive else LISTEN_CMD).format(
-        agent_id=agent_id)
+    # Only interactive seats carry this hook, so the fixed-window command is
+    # always the right one (driven seats never install a listener nag).
+    resume_cmd = LISTEN_CMD.format(agent_id=agent_id)
     arm_nag = (
         'if listener_dead() and not payload.get("stop_hook_active"):\n'
         '    msg = ("Your agora BACKGROUND RECEPTION is not armed: this session "\n'
@@ -663,8 +665,7 @@ def install_claude_listener(workspace: Path, url: str, agent_id: str) -> list[Pa
     return [settings_path]
 
 
-def install_cursor_stop_hook(workspace: Path, url: str, agent_id: str,
-                             adaptive: bool = False) -> list[Path]:
+def install_cursor_stop_hook(workspace: Path, url: str, agent_id: str) -> list[Path]:
     """Cursor hooks live at `.cursor/hooks.json` (stop event, followup_message
     re-prompt). Same generated script as Claude/Codex, Cursor's output
     contract; `loop_limit` bounds the re-prompt chain harness-side. The
@@ -672,8 +673,8 @@ def install_cursor_stop_hook(workspace: Path, url: str, agent_id: str,
     are preserved; only entries whose command contains `agora_wait` are
     replaced. The command path is ABSOLUTE — hook commands resolve against
     the harness launch dir, not the hooks file (the relative-path trap that
-    bit the deployed fleet). `adaptive` matches the nag's resume command to
-    a headless seat's adaptive loop."""
+    bit the deployed fleet). Interactive seats only: a driven seat's watcher
+    owns reception, so it never installs this hook."""
     hooks_dir = workspace / ".cursor" / "hooks"
     hooks_dir.mkdir(parents=True, exist_ok=True)
     script = hooks_dir / "agora_wait.sh"
@@ -682,7 +683,7 @@ def install_cursor_stop_hook(workspace: Path, url: str, agent_id: str,
     # end while it is dead, until the agent re-arms (crash-recovery lesson).
     script.write_text(stop_hook_script(url, agent_id,
                                        reprompt_key="followup_message",
-                                       check_listener=True, adaptive=adaptive))
+                                       check_listener=True))
     script.chmod(0o755)
 
     hooks_path = workspace / ".cursor" / "hooks.json"
@@ -705,10 +706,11 @@ def setup_cursor(workspace: Path, agent_id: str, url: str, about: str,
                  api_key: str | None = None, headless: bool = False) -> list[Path]:
     """Wire a workspace as a Cursor agora agent (all project-scoped).
 
-    `headless=True` selects the adaptive reception loop (idle window widens to
-    1200s to save inferences) — correct ONLY for a dedicated seat no human
-    shares, since a long window delays a human's typed prompt. The default
-    keeps the bounded fixed-240s loop."""
+    `headless=True` wires a DRIVEN seat: an external watcher (`agora drive`,
+    or the skill's "start agora protocol") owns reception and spawns one
+    bounded turn per obligation, so the rule forbids in-session listeners
+    outright. Correct ONLY for a dedicated seat no human shares. The default
+    (interactive) keeps the monitored background listener loop."""
     written: list[Path] = []
     cursor = workspace / ".cursor"
     (cursor / "rules").mkdir(parents=True, exist_ok=True)
@@ -726,14 +728,20 @@ def setup_cursor(workspace: Path, agent_id: str, url: str, about: str,
     if legacy_md.exists():
         legacy_md.unlink()
     rule_path = cursor / "rules" / "agora.mdc"
-    arming = _ARMING_CURSOR_HEADLESS if headless else _ARMING_CURSOR
-    rule_path.write_text("---\nalwaysApply: true\n---\n\n"
-                         + rule_text(agent_id, arming=arming))
+    if headless:
+        rule = rule_text(agent_id, wake=_WAKE_DRIVEN,
+                         arming=_ARMING_CURSOR_DRIVEN,
+                         wait_policy=_WAIT_DRIVEN)
+    else:
+        rule = rule_text(agent_id)
+    rule_path.write_text("---\nalwaysApply: true\n---\n\n" + rule)
     written.append(rule_path)
 
-    if with_hook:
-        written += install_cursor_stop_hook(workspace, url, agent_id,
-                                            adaptive=headless)
+    # A driven seat gets no listener-nag hook: its watcher owns reception,
+    # and a turn-end nag to "re-arm your listener" would order the exact
+    # behavior the driven rule forbids.
+    if with_hook and not headless:
+        written += install_cursor_stop_hook(workspace, url, agent_id)
     return written
 
 

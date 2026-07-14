@@ -108,6 +108,72 @@ def test_crashed_resume_drops_session_and_boots_next(home):
     assert d.session_id == "s2"
 
 
+def test_idle_timeout_sweeps_missed_debt_once(home, monkeypatch):
+    """The tail-from-END blind spot (live finding: an ask that landed between
+    two listen windows never woke the seat): an idle timeout with OWED debt
+    drives one sweep turn — and the SAME unchanged debt does not burn a
+    second turn on the next window; new debt (signature change) does."""
+    spawns = []
+
+    def spawn(prompt, sid):
+        spawns.append(prompt)
+        return "s", True
+
+    d = _driver(home, spawn)
+    # listen: three idle timeouts (rc 0), then stop via max_turns
+    monkeypatch.setattr("agora.drive.run_listen", lambda **kw: 0)
+    sigs = iter(["a1", "a1", "a1,b2"])                # debt appears, persists, grows
+    monkeypatch.setattr(Driver, "_owed_signature",
+                        lambda self: next(sigs, "a1,b2"))
+    d.run(max_turns=2)                                # ends after 2 driven turns
+    assert len(spawns) == 2                           # swept once per CHANGE, not per window
+
+
+def test_loop_listens_with_signal_passthrough(home, monkeypatch):
+    """The embedded listen must NOT swallow SIGTERM into a clean return
+    (live finding: pkill'd drivers survived — the listener's own handlers
+    turned the kill into rc=0 and the loop re-armed). The driver passes
+    signal_passthrough so the default handlers stay and the process dies."""
+    seen = {}
+
+    def listen(**kw):
+        seen.update(kw)
+        raise KeyboardInterrupt                       # end after one call
+
+    monkeypatch.setattr("agora.drive.run_listen", listen)
+    d = _driver(home, lambda p, s: ("s", True))
+    with pytest.raises(KeyboardInterrupt):
+        d.run()
+    assert seen.get("signal_passthrough") is True
+    assert seen.get("important_only") is True
+    assert seen.get("once") is True
+
+
+def test_idle_timeout_without_debt_never_spawns(home, monkeypatch):
+    """A quiet hub costs zero LLM turns: idle timeouts with no debt drive
+    nothing (the loop is exited via the max_turns=0 bound)."""
+    spawns = []
+
+    def spawn(prompt, sid):
+        spawns.append(prompt)
+        return "s", True
+
+    d = _driver(home, spawn)
+    calls = {"n": 0}
+
+    def listen(**kw):
+        calls["n"] += 1
+        if calls["n"] >= 4:
+            raise KeyboardInterrupt                   # end the test loop
+        return 0
+
+    monkeypatch.setattr("agora.drive.run_listen", listen)
+    monkeypatch.setattr(Driver, "_owed_signature", lambda self: None)
+    with pytest.raises(KeyboardInterrupt):
+        d.run()
+    assert spawns == []
+
+
 def test_real_spawn_defaults_to_sandbox_enabled(home, monkeypatch):
     """The safety default (review E ship-blocker): the real spawn command
     carries --sandbox enabled and NOT --force unless sandbox is explicitly

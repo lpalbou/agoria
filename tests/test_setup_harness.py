@@ -449,21 +449,26 @@ def test_rule_text_cursor_loop_never_says_kill(tmp_path):
     assert "--adaptive" not in rule
 
 
-def test_rule_text_cursor_headless_is_adaptive(tmp_path):
-    """--headless selects the adaptive listener: the tool tunes the window,
-    the agent runs a CONSTANT command in its background shell, and it must
-    never be told to compute the wait itself."""
-    setup_cursor(tmp_path, "runtime", "http://hub:8765", "", "agora-mcp",
-                 with_hook=False, headless=True)
+def test_rule_text_cursor_headless_is_driven(tmp_path):
+    """--headless wires a DRIVEN seat: an external watcher owns reception,
+    so the rule must forbid in-session listeners entirely (never teach a
+    listen loop) and teach the turn contract: settle, ack, END. It must
+    also not install the listener-nag stop hook, which would order the
+    exact behavior the rule forbids."""
+    written = setup_cursor(tmp_path, "runtime", "http://hub:8765", "",
+                           "agora-mcp", with_hook=True, headless=True)
     rule = (tmp_path / ".cursor" / "rules" / "agora.mdc").read_text()
 
-    assert ("while true; do agora listen --once --as runtime --important-only "
-            "--adaptive --max-wait 1200; sleep 5; done") in rule
+    assert "DRIVEN RECEPTION" in rule
+    assert "agora listen" in rule                 # named only to forbid it
+    assert "NEVER run `agora listen`" in rule
+    assert "while true; do agora listen" not in rule   # no loop is ever taught
+    assert "END" in rule and "watcher" in rule
     assert "--idle-nudge" not in rule
-    assert "block_until_ms 0" in rule
-    assert "NEVER compute the wait yourself" in rule
-    assert "NEVER pgrep or kill" in rule
-    assert "listen-runtime.backoff" in rule
+    # The listener-nag hook must NOT be installed for a driven seat, even
+    # with with_hook=True.
+    assert not (tmp_path / ".cursor" / "hooks.json").exists()
+    assert all("hooks" not in str(p) for p in written)
 
 
 def test_rule_text_wake_is_informational_in_all_variants(tmp_path):

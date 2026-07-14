@@ -128,6 +128,7 @@ def spawn_turn(prompt: str, session_id: str | None) -> tuple[str | None, bool]:
     if session_id:
         cmd += ["--resume", session_id]
     cmd.append(prompt)
+    t0 = time.time()
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=TURN_TIMEOUT)
     except subprocess.TimeoutExpired:
@@ -146,7 +147,36 @@ def spawn_turn(prompt: str, session_id: str | None) -> tuple[str | None, bool]:
                 sid = obj["session_id"]
         except ValueError:
             pass
+    emit(f"AGORA_DRIVE turn=ok dur={time.time() - t0:.0f}s session={sid or '-'}")
     return sid, True
+
+
+def owed_signature(seat: str, url: str | None) -> str | None:
+    """Debt poll for the missed-wake sweep: the listener tails the notify
+    file from END, so an obligation landing BETWEEN two listen windows never
+    wakes the seat by itself. Returns a comparable signature of the debt
+    (None = none/unknowable); gating the sweep on the signature CHANGING
+    keeps stuck debt from burning one turn per idle window. Stdlib-only
+    (urllib + the CLI's cached key)."""
+    base = (url or "http://127.0.0.1:8765").rstrip("/")
+    try:
+        keys = json.load(open(os.path.join(home(), "keys.json")))
+        key = keys.get(f"{base}::{seat}")
+        if not key:
+            return None
+        import urllib.request
+        req = urllib.request.Request(f"{base}/owed",
+                                     headers={"Authorization": f"Bearer {key}"})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            owed = json.load(r)
+        counts = owed.get("counts", {})
+        if not (counts.get("to_answer") or counts.get("to_consume")):
+            return None
+        ids = sorted([row.get("id", "") for row in owed.get("to_answer", [])]
+                     + [row.get("answer_id", "") for row in owed.get("to_consume", [])])
+        return ",".join(ids)
+    except Exception:
+        return None
 
 
 def inline_loop(seat: str, url: str | None) -> None:
@@ -162,27 +192,42 @@ def inline_loop(seat: str, url: str | None) -> None:
     if url:
         listen += ["--url", url]
     backoff = 1.0
+
+    def drive_one() -> None:
+        nonlocal session_id, turns_on_session
+        now = time.time()
+        spawn_times[:] = [t for t in spawn_times if now - t < 3600]
+        if len(spawn_times) >= TURN_BUDGET:
+            emit(f"AGORA_DRIVE parked reason=turn-budget ({TURN_BUDGET}/h)")
+            time.sleep(300)
+            return
+        spawn_times.append(now)
+        prompt = WAKE_PROMPT if session_id else BOOT_PROMPT
+        session_id, ok = spawn_turn(prompt, session_id)
+        if ok and session_id:
+            open(sess_file, "w").write(session_id)
+            turns_on_session += 1
+            if turns_on_session >= SESSION_ROTATE:
+                session_id, turns_on_session = None, 0   # flush bloat + residue
+        elif not ok and session_id:
+            session_id, turns_on_session = None, 0       # boot fresh next wake
+
+    swept: str | None = None
     while True:
         rc = subprocess.run(listen).returncode
         if rc == 2:                                   # obligation arrived
-            now = time.time()
-            spawn_times[:] = [t for t in spawn_times if now - t < 3600]
-            if len(spawn_times) >= TURN_BUDGET:
-                emit(f"AGORA_DRIVE parked reason=turn-budget ({TURN_BUDGET}/h)")
-                time.sleep(300)
-                continue
-            spawn_times.append(now)
-            prompt = WAKE_PROMPT if session_id else BOOT_PROMPT
-            session_id, ok = spawn_turn(prompt, session_id)
-            if ok and session_id:
-                open(sess_file, "w").write(session_id)
-                turns_on_session += 1
-                if turns_on_session >= SESSION_ROTATE:
-                    session_id, turns_on_session = None, 0   # flush bloat + residue
-            elif not ok and session_id:
-                session_id, turns_on_session = None, 0       # boot fresh next wake
+            drive_one()
             backoff = 1.0
         elif rc == 0:                                 # idle timeout / hub down
+            # Missed-wake sweep: debt that landed between listen windows
+            # (tail-from-END blind spot) still gets a turn. Gated on the
+            # debt CHANGING — a quiet hub costs zero LLM turns and stuck
+            # debt cannot burn a turn per window.
+            sig = owed_signature(seat, url)
+            if sig is not None and sig != swept:
+                emit("AGORA_DRIVE sweep=owed")
+                drive_one()
+                swept = sig
             continue
         else:
             time.sleep(backoff)

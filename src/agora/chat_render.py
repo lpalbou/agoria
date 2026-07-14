@@ -157,18 +157,18 @@ def ask_lines(s: Style, asks: list[dict[str, Any]],
 
 
 def wrap_body(text: str, width: int, indent: str = "  ",
-              max_lines: int | None = BODY_MAX_LINES) -> tuple[list[str], int]:
-    """Wrap to the terminal, keep paragraph breaks, cap the height
+              max_lines: int | None = BODY_MAX_LINES,
+              style: "Style | None" = None) -> tuple[list[str], int]:
+    """Render a message body to the terminal, markdown-aware (tables
+    aligned, headings styled, lists hanging-indented — see md_render.py;
+    operator finding 2026-07-14: raw wrapping turned agents' status tables
+    into pipe soup). Keeps paragraph breaks, caps the height
     (max_lines=None removes the cap — for deliberate reads).
     Returns (visible lines, hidden line count)."""
+    from .md_render import render_markdown
+
     text = safe(text)
-    lines: list[str] = []
-    for para in text.splitlines():
-        lines.extend(textwrap.wrap(para, max(20, width - len(indent)),
-                                   break_long_words=False,
-                                   break_on_hyphens=False) or [""])
-    while lines and not lines[-1]:
-        lines.pop()
+    lines = render_markdown(text, max(20, width - len(indent)), style)
     if max_lines is None or len(lines) <= max_lines:
         return [indent + l for l in lines], 0
     return [indent + l for l in lines[:max_lines]], len(lines) - max_lines
@@ -219,7 +219,8 @@ def message_block(s: Style, *, sender: str, seq: int, status: str,
     if title and not body_text.strip().startswith(title.rstrip("…")):
         lines.append(f"  {s.bold(title)}")
     if body_text:
-        visible, hidden = wrap_body(body_text, width, max_lines=max_lines)
+        visible, hidden = wrap_body(body_text, width, max_lines=max_lines,
+                                    style=s)
         lines.extend(visible)
         if hidden:
             lines.append(s.dim(f"  ⋯ {hidden} more line(s) — /read {ref}"))
@@ -281,7 +282,7 @@ def file_block(s: Style, *, path: str, content: str, version: int,
     header = (f"{s.cyan('FILE')} {s.bold(path)} {s.dim('·')} "
               f"{s.dim(f'v{version} · by ')}{s.sender(updated_by)} "
               f"{s.dim(f'· {size_bytes} bytes · in {channel}')}")
-    visible, _ = wrap_body(content, width, max_lines=None)
+    visible, _ = wrap_body(content, width, max_lines=None, style=s)
     return "\n".join([s.dim("─" * width), header, s.dim("─" * width), *visible])
 
 

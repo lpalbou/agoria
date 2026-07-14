@@ -224,6 +224,35 @@ def test_message_block_lists_asks_below_the_body():
     assert "/reply 727:1 TEXT" in block
 
 
+def test_wrap_body_renders_markdown_tables_aligned():
+    """Operator finding (2026-07-14): agents' status tables arrived as
+    wrapped pipe soup. The chat surface renders markdown — pipe tables come
+    out column-aligned within the terminal width, cells never torn across
+    lines by naive wrapping."""
+    from agora.chat_render import wrap_body
+
+    body = ("DONE (last 40 min)\n"
+            "| # | What | Proof |\n"
+            "|---|---|---|\n"
+            "| 1 | :8080 stack bounced, console :3003 relaunched | all healthy |\n"
+            "| 2 | max_iterations=20 ruling relayed + stored | commons 2013 |\n")
+    visible, hidden = wrap_body(body, width=100, max_lines=None)
+    assert hidden == 0
+    rows = [l for l in visible if l.strip().startswith("|")]
+    assert len(rows) >= 4                       # header + rule + 2 data rows
+    # aligned: every table row has identical visible width
+    assert len({len(r.rstrip()) for r in rows}) == 1
+    # a cell's content stays inside its row (no torn 'all healthy' remnant line)
+    assert not any(l.strip() == "healthy |" for l in visible)
+
+    # narrow terminal: the table still renders as a table (cells wrap inside
+    # their columns instead of the line breaking mid-pipe)
+    narrow, _ = wrap_body(body, width=56, max_lines=None)
+    nrows = [l for l in narrow if l.strip().startswith("|")]
+    assert len({len(r.rstrip()) for r in nrows}) == 1
+    assert len(nrows) > 4                       # some cells wrapped to 2 lines
+
+
 def test_wrap_body_preserves_paragraphs_and_counts_hidden():
     from agora.chat_render import wrap_body
     visible, hidden = wrap_body("a\n\nb", width=80, max_lines=10)

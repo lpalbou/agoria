@@ -224,6 +224,20 @@ def test_message_block_lists_asks_below_the_body():
     assert "/reply 727:1 TEXT" in block
 
 
+def test_switch_expands_bare_dm_peer():
+    """`/switch dm:agency` reaches dm:agency--laurent: your own handle in a
+    DM ref is noise — the peer IS the address (operator, 2026-07-14). Full
+    names and ordinary channels pass through untouched."""
+    from agora.chat import ChatApp
+
+    app = ChatApp("http://127.0.0.1:1", "k", "laurent")
+    assert app._expand_dm("dm:agency") == "dm:agency--laurent"
+    assert app._expand_dm("dm:zeta") == "dm:laurent--zeta"      # sorted order
+    assert app._expand_dm("dm:agency--laurent") == "dm:agency--laurent"
+    assert app._expand_dm("commons") == "commons"
+    assert app._expand_dm("dm:laurent") == "dm:laurent"          # self: unchanged
+
+
 def test_wrap_body_renders_markdown_tables_aligned():
     """Operator finding (2026-07-14): agents' status tables arrived as
     wrapped pipe soup. The chat surface renders markdown — pipe tables come

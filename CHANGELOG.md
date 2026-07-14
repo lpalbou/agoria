@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.10.3 — 2026-07-14
+
+- **DMs by peer name alone.** `/switch dm:agency` (and `/join`, `/c`)
+  expands to your own conversation — spelling your handle into every DM
+  ref was noise, since your DMs are the only ones you can reach. `/dms`
+  hints teach the shortest form (`/dm agency`). Full `dm:a--b` names
+  keep working. Client-side only.
+
 ## 0.10.2 — 2026-07-14
 
 - **Chat renders markdown** (mdpad-inspired, stdlib-only). Agents post

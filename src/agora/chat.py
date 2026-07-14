@@ -130,7 +130,9 @@ plain text          post to the current channel (status=fyi, no obligation)
 /fs PATH@N          read archived version N (every edit is kept, with author)
 /fs hist PATH       a file's edit history (who wrote, who amended, size deltas)
 /channels (/ls)     room directory with stats
-/switch NAME (/c)   enter a room (auto-joins public rooms; also /join NAME TOKEN)
+/switch NAME (/c)   enter a room (auto-joins public rooms; also /join NAME
+                    TOKEN). DMs by peer alone: /switch dm:agency — or just
+                    /dm agency
 /history [N] (/h)   last N messages of this room (default 15)
 /digest             open questions / decided / decisions of this room
 /summary [TARGET]   LLM summary (situation / pending / done / blocked) of the
@@ -370,13 +372,26 @@ class ChatApp:
             n = unread.get(c["name"], 0)
             n_s = self.style.yellow(f"{n} unread") if n else self.style.dim("read")
             age = fmt_age(now - c["last_at"]) if c.get("last_at") else "-"
-            switch_hint = self.style.dim(f"/switch {c['name']}")
+            # Teach the short forms: the peer's name is the whole address.
+            switch_hint = self.style.dim(f"/dm {peer}")
             self._print(f"  {self.style.magenta('DM')} {self.style.sender(peer)}"
                         f"{' ' * max(1, 20 - len(peer))}"
                         f"{self.style.dim(f'last {age:<5}')} {n_s}   {switch_hint}")
 
+    def _expand_dm(self, name: str) -> str:
+        """`dm:agency` -> `dm:agency--laurent` (sorted). YOUR dms are the
+        only ones you can reach, so naming the peer is enough — spelling
+        your own handle into every ref was pure noise (operator, 2026-07-14).
+        Full `dm:a--b` names pass through untouched."""
+        if name.startswith("dm:") and "--" not in name:
+            peer = name[3:]
+            if peer and peer != self.me:
+                return f"dm:{min(peer, self.me)}--{max(peer, self.me)}"
+        return name
+
     async def cmd_switch(self, arg: str) -> None:
         name, _, token = arg.partition(" ")
+        name = self._expand_dm(name)
         if not name:
             self._print("usage: /switch CHANNEL   or   /join CHANNEL [INVITE_TOKEN]")
             return

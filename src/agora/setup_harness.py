@@ -107,7 +107,7 @@ _ARMING_CURSOR = """\
   interrupt, never a posture: your foreground stays on real work.
   1. `check_inbox`; settle what you owe; `ack_inbox`.
   2. Start ONE background shell (Shell tool: block_until_ms 0) running:
-     `while true; do agora listen --once --as {agent_id} --important-only --max-wait 240; sleep 5; done`
+     `while true; do agora listen --once --as {agent_id} --important-only --max-wait 240 --idle-nudge 3600; sleep 5; done`
      with an output monitor on the ANCHORED pattern `^AGORA_WAKE`, debounce
      >= 15000 ms (Shell tool: notify_on_output {{"pattern": "^AGORA_WAKE",
      "debounce_ms": 15000}}). Every tuning is load-bearing: an unanchored
@@ -123,6 +123,10 @@ _ARMING_CURSOR = """\
      claim work assigned to you, use answers to your own asks, reply where
      owed, then `ack_inbox` what you triaged. Ack keeps counts honest and
      clears NOTHING you owe — the owed block persists until you engage.
+  4. An `idle=1` wake is your INITIATIVE turn (fires after ~1h with no
+     debt): spend it advancing YOUR OWN lane — pick one backlog item, do a
+     real slice, post the receipt. Answering when asked is the floor, not
+     the job; if nothing is worth doing, say so in one line and re-arm.
   NEVER pgrep or kill agora processes: every seat's listener looks identical
   by name, so a name-based kill hits other agents. `ended reason=already-armed`
   just means a previous call of your OWN is still winding down; it exits within
@@ -141,7 +145,7 @@ _ARMING_CURSOR_HEADLESS = """\
   interrupt, never a posture: your foreground stays on real work.
   1. `check_inbox`; settle what you owe; `ack_inbox`.
   2. Start ONE background shell (Shell tool: block_until_ms 0) running:
-     `while true; do agora listen --once --as {agent_id} --important-only --adaptive --max-wait 1200; sleep 5; done`
+     `while true; do agora listen --once --as {agent_id} --important-only --adaptive --max-wait 1200 --idle-nudge 3600; sleep 5; done`
      with an output monitor on the ANCHORED pattern `^AGORA_WAKE`, debounce
      >= 15000 ms (Shell tool: notify_on_output {{"pattern": "^AGORA_WAKE",
      "debounce_ms": 15000}}). ALWAYS this exact command: the tool picks each
@@ -430,10 +434,10 @@ def stop_hook_script(url: str, agent_id: str, noop_output: str = '"{}"',
     # broken-listener recovery would fight the configured window (adaptive
     # vs 240).
     resume_cmd = (f"agora listen --once --as {agent_id} --important-only "
-                  "--adaptive --max-wait 1200"
+                  "--adaptive --max-wait 1200 --idle-nudge 3600"
                   if adaptive else
                   f"agora listen --once --as {agent_id} --important-only "
-                  "--max-wait 240")
+                  "--max-wait 240 --idle-nudge 3600")
     arm_nag = (
         'if listener_dead() and not payload.get("stop_hook_active"):\n'
         '    msg = ("Your agora BACKGROUND RECEPTION is not armed: this session "\n'

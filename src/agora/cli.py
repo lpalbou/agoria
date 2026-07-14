@@ -1143,7 +1143,7 @@ def cmd_listen(args: argparse.Namespace) -> None:
         max_wait=args.max_wait, debounce=args.debounce,
         important_only=args.important_only, preview=args.preview,
         notify_file=args.notify_file, lock=args.lock, heartbeat=args.heartbeat,
-        poll=args.poll, adaptive=args.adaptive))
+        poll=args.poll, adaptive=args.adaptive, idle_nudge=args.idle_nudge))
 
 
 def cmd_status(args: argparse.Namespace) -> None:
@@ -1378,6 +1378,12 @@ def build_parser() -> argparse.ArgumentParser:
                          "1200s) when idle; state in listen-<id>.backoff. A "
                          "message returns instantly regardless, so wide idle "
                          "windows cost no latency, only fewer empty inferences")
+    ln.add_argument("--idle-nudge", dest="idle_nudge", type=float, default=0.0,
+                    help="--once: after S seconds without ANY wake, emit one "
+                         "synthetic initiative wake (exit 2, idle=1) telling "
+                         "the seat to spend a turn on its own backlog — at "
+                         "most one per S seconds; a real wake resets the "
+                         "clock (default: off)")
     ln.add_argument("--debounce", type=float, default=15.0,
                     help="coalesce a burst into ONE wake sentinel (default 15s)")
     ln.add_argument("--important-only", dest="important_only", action="store_true",

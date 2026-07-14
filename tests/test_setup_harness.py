@@ -360,7 +360,7 @@ def test_rule_text_cursor_has_background_reception_and_no_watcher_ban(tmp_path):
     # behind others' messages (fleet failure, 2026-07-13).
     assert "BACKGROUND RECEPTION" in rule and "FIRST turn" in rule
     assert ("while true; do agora listen --once --as runtime --important-only "
-            "--max-wait 240; sleep 5; done") in rule
+            "--max-wait 240 --idle-nudge 3600; sleep 5; done") in rule
     # fyi chatter must not wake a seat (0080 watcher audit: traffic-driven
     # burn); obligations still do, and fyi drains at the next check_inbox.
     assert "not for fyi chatter" in rule
@@ -454,7 +454,7 @@ def test_rule_text_cursor_headless_is_adaptive(tmp_path):
     rule = (tmp_path / ".cursor" / "rules" / "agora.mdc").read_text()
 
     assert ("while true; do agora listen --once --as runtime --important-only "
-            "--adaptive --max-wait 1200; sleep 5; done") in rule
+            "--adaptive --max-wait 1200 --idle-nudge 3600; sleep 5; done") in rule
     assert "block_until_ms 0" in rule
     assert "NEVER compute the wait yourself" in rule
     assert "NEVER pgrep or kill" in rule

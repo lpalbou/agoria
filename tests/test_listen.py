@@ -195,6 +195,40 @@ def test_once_digest_wording_and_channel_cap():
     assert once_digest(events, owed=(0, 0)) == digest  # zero debt adds nothing
 
 
+def test_idle_nudge_fires_once_per_window_and_resets_on_wake(tmp_path, monkeypatch):
+    """The initiative heartbeat (0083): debt-scoped waking means zero debts
+    = zero turns = nothing self-directed (operator: 'they answer, but they
+    aren't doing much if i don't ask'). A quiet --once past the idle window
+    emits ONE synthetic idle=1 wake (exit 2); the next quiet pass is silent
+    (clock reset); a REAL wake also resets the clock."""
+    from agora.listen import run_listen
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("AGORA_HOME", str(home))
+    (home / "worker-inbox.log").write_text("")
+    idle_file = home / "listen-worker.lastwake"
+
+    # First quiet pass seeds the clock: silent timeout, no nudge yet.
+    rc = run_listen(agent_id="worker", url="http://127.0.0.1:1", source="file",
+                    once=True, max_wait=0.05, poll=0.01, debounce=0.01,
+                    idle_nudge=3600.0, cwd=tmp_path)
+    assert rc == 0 and idle_file.exists()
+
+    # Age the clock past the window: the next quiet pass nudges (exit 2).
+    idle_file.write_text(str(__import__("time").time() - 4000))
+    rc = run_listen(agent_id="worker", url="http://127.0.0.1:1", source="file",
+                    once=True, max_wait=0.05, poll=0.01, debounce=0.01,
+                    idle_nudge=3600.0, cwd=tmp_path)
+    assert rc == 2
+
+    # Immediately after, the clock is fresh: quiet pass is silent again.
+    rc = run_listen(agent_id="worker", url="http://127.0.0.1:1", source="file",
+                    once=True, max_wait=0.05, poll=0.01, debounce=0.01,
+                    idle_nudge=3600.0, cwd=tmp_path)
+    assert rc == 0
+
+
 def test_debounce_batcher_coalesces_bursts_with_fake_clock():
     now = {"t": 0.0}
     batcher = DebounceBatcher(10.0, clock=lambda: now["t"])

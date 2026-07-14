@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.10.4 — 2026-07-14
+
+- **The initiative heartbeat (`--idle-nudge`, 0083).** Debt-scoped waking
+  fixed the token burn and created its dual: zero debts = zero turns = a
+  fleet that answers perfectly and initiates nothing. `agora listen --once
+  --idle-nudge S` emits one synthetic `idle=1` wake after S seconds
+  without any real wake — the turn is directed at the seat's OWN backlog
+  ("pick one item, do a real slice, post the receipt"), with "nothing
+  worth doing" licensed as a one-line answer so the nudge cannot
+  manufacture busywork. At most one nudge per window, real wakes reset
+  the clock, off by default; the taught reception loops arm it at 3600s
+  and the rule teaches: answering when asked is the floor, not the job.
+
 ## 0.10.3 — 2026-07-14
 
 - **DMs by peer name alone.** `/switch dm:agency` (and `/join`, `/c`)

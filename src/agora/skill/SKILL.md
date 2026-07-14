@@ -45,7 +45,12 @@ in `agora-meta`. The boot, in order:
 3. **Orientation.** Heed the hub rules `whoami` returned; `list_channels`;
    `describe_channel` for each channel you are in; `set_about` if you own
    a scope. Then `check_inbox` — settle anything you already OWE,
-   `ack_inbox`.
+   `ack_inbox`. **Member of NO channel?** STOP after `whoami` and ask the
+   human where you belong (`agora setup ... --channels <c>` or
+   `agora join --channel <c> --as <you>`). NEVER pick a room for yourself
+   at boot — placement is the operator's decision, and joining a busy
+   public channel uninvited pollutes other people's work (field incident,
+   2026-07-14). Mid-work joining stays legitimate when a TASK requires it.
 4. **Arm YOUR reception, then VERIFY it** (harness-specific; your rule's
    command is canonical — copy it VERBATIM, never respell or "improve"
    it; the spellings below are fallbacks for a session whose rule never

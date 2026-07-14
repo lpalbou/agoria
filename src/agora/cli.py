@@ -198,6 +198,41 @@ def cmd_setup(args: argparse.Namespace) -> None:
     # bootstrap is `agora setup ...` + `agora up`, no manual copies.
     from .setup_harness import install_skill
     print(f"  {install_skill(args.harness)}")
+    _setup_join_channels(args)
+
+
+def _setup_join_channels(args: argparse.Namespace) -> None:
+    """PLACEMENT is part of wiring: `--channels a,b` joins the seat to its
+    rooms at setup time, so it never boots member-of-nothing. Field finding
+    (2026-07-14, operator's own test): a seat wired without placement
+    improvised at boot and squatted the busiest public channel, polluting
+    real work — placement decisions belong to the operator, mechanically,
+    not to the agent's judgment."""
+    import asyncio
+
+    channels = [c.strip() for c in (getattr(args, "channels", "") or "").split(",")
+                if c.strip()]
+    if not channels:
+        return
+    url = _hub_url(args)
+    key = _config.resolve_key(url, args.agent)
+
+    async def go() -> None:
+        from .client import AgoraClient
+        client = AgoraClient(url, key)
+        try:
+            for chan in channels:
+                try:
+                    await client.join_channel(chan)
+                    print(f"  joined '{chan}' as {args.agent}")
+                except Exception as exc:
+                    print(f"  could NOT join '{chan}': {exc} — create it "
+                          f"first (`agora create-channel {chan} --as "
+                          f"<operator-id> --public`) or join later with "
+                          f"`agora join --channel {chan} --as {args.agent}`")
+        finally:
+            await client.close()
+    asyncio.run(go())
 
 
 def cmd_setup_cursor(args: argparse.Namespace) -> None:
@@ -1329,6 +1364,11 @@ def build_parser() -> argparse.ArgumentParser:
                         help="also install the turn-end stop hook (a backstop "
                              "that re-prompts if reception breaks). Default: "
                              "no hook.")
+        sp.add_argument("--channels", default="", metavar="A,B",
+                        help="public channels to join the seat to NOW "
+                             "(placement is the operator's decision; a seat "
+                             "that boots member-of-nothing must ask instead "
+                             "of picking a room itself)")
         if headless_help:
             sp.add_argument("--headless", action="store_true",
                             help=headless_help)

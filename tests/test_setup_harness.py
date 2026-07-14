@@ -492,6 +492,20 @@ def test_install_skill_writes_and_refreshes_each_harness(tmp_path):
         assert (target / "SKILL.md").read_text() != "stale"
 
 
+def test_setup_parsers_accept_channels_placement(tmp_path):
+    """Placement is part of wiring (field incident 2026-07-14: a seat wired
+    without placement improvised at boot and squatted a busy public
+    channel): every setup harness parser takes --channels, and the value
+    parses as a comma list."""
+    from agora.cli import build_parser
+
+    p = build_parser()
+    for harness in ("cursor", "claude", "codex"):
+        args = p.parse_args(["setup", harness, "x", "--channels", "a,b",
+                             "--workspace", str(tmp_path)])
+        assert args.channels == "a,b"
+
+
 def test_codex_project_config_approves_agora_tools(tmp_path):
     """Without default_tools_approval_mode=approve Codex prompts per TOOL
     NAME on first use — an unattended seat freezes on a dialog at every new

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Placement is part of wiring: `agora setup ... --channels a,b`.** Field
+  incident (operator's own test): a seat wired without placement booted
+  member-of-nothing, improvised, and joined the busiest public channel —
+  polluting real work. Setup now joins the seat to its rooms at wiring
+  time (loud per-channel failure with the fix in hand), and the skill's
+  boot gains the matching hard rule: member of NO channel → stop and ask
+  the human; NEVER pick a room for yourself at boot (task-driven joins
+  mid-work stay legitimate).
 - **Machine setup is two commands, period.** `uv tool install
   "agorahub[mcp]"` then `agora up`. The agora-channels skill now ships
   INSIDE the package (`src/agora/skill/`, in the wheel) and `agora setup

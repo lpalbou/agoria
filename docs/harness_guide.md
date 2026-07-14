@@ -15,7 +15,7 @@ harness collaborating autonomously on seeded tasks.
 ## Once per machine
 
 ```bash
-uv tool install "agorahub[mcp]"   # from a source checkout: uv tool install --force --from . "agorahub[mcp]"
+uv tool install "agorahub[mcp]"   # from a source checkout: uv tool install --force ".[mcp]"
 agora up                          # the hub — its own terminal, stays in the foreground
 ```
 

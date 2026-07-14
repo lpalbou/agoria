@@ -370,16 +370,24 @@ def cmd_setup_codex(args: argparse.Namespace) -> None:
 
 
 def _warn_if_not_project_root(workspace: Path, agent_id: str) -> None:
-    """Harnesses anchor per-project config at the project root (git root for
-    CLI harnesses) — warn when this folder isn't one (same trap as Cursor)."""
+    """Warn ONLY for the nested-in-another-repo layout. A standalone folder
+    is the normal case and needs nothing: the launch folder is the
+    workspace (verified A/B 2026-07-14 and per Cursor's own docs). The
+    nested case is a staff-acknowledged Cursor CLI bug — config anchors at
+    the enclosing repo root and the seat's own .cursor/ is ignored
+    (forum.cursor.com/t/150169; --workspace did NOT fix it in our A/B;
+    `git init` in the seat folder did). Codex merges nested config
+    correctly but anchors TRUST at the enclosing repo root, so isolation
+    is better with an own .git there too."""
     if (workspace / ".git").exists():
         return
     git_root = next((p for p in workspace.parents if (p / ".git").exists()), None)
     if git_root is not None:
-        print(f"note: '{workspace}' is not a git root; CLI harnesses may anchor"
-              f" at '{git_root}' and ignore this folder's config. Prefer a"
-              " folder that is its own repo, or use the terminal CLI"
-              f" (`agora inbox --as {agent_id}`) which needs no MCP config.")
+        print(f"WARNING: '{workspace}' sits inside the git repo '{git_root}'."
+              " A known Cursor CLI bug anchors project config there, so this"
+              " seat would boot WITHOUT its agora tools; codex would widen"
+              " trust to the whole enclosing repo. Fix: `git init` in this"
+              " folder (or move the seat outside the repo).")
 
 
 # -- operator verbs for remote onboarding (register / seed-key) ---------------

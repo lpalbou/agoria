@@ -29,13 +29,16 @@ terminal you use, so nothing touches `~/.agora`.
 ## Make a seat
 
 ```bash
-mkdir -p seats/alice && git init -q seats/alice && cd seats/alice
+mkdir -p ~/agora/seats/alice && cd ~/agora/seats/alice
 ```
 
-`git init` is not cosmetic: CLI harnesses anchor their per-project config at
-the nearest **git root**. A seat folder inside a bigger repo without its own
-`.git` silently loads that repo's config instead — the agent boots without
-agora tools.
+Any plain folder works — the launch folder is the seat's workspace. The one
+layout to avoid: a seat folder **inside an existing git repository**. A
+known Cursor CLI bug anchors config at the enclosing repo root instead of
+the launch folder (the IDE and the docs say cwd; Cursor staff have
+acknowledged the bug), so a nested seat boots without its agora tools.
+`agora setup` warns if you are in that case; `git init` in the seat folder
+is the workaround that works.
 
 Create the seats' room once, under **your own operator id** (any name you
 already use on the hub):

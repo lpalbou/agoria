@@ -378,6 +378,37 @@ def write_mcp_json(path: Path, mcp_command: str, url: str, agent_id: str,
         path.chmod(0o600)
 
 
+_SKILL_DIRS = {
+    # Where each harness discovers agent skills. One entry per harness so
+    # `agora setup <harness>` refreshes exactly the skill its seat will use.
+    "cursor": Path(".cursor") / "skills-cursor" / "agora-channels",
+    "claude": Path(".claude") / "skills" / "agora-channels",
+    "codex": Path(".codex") / "skills" / "agora-channels",
+}
+
+
+def install_skill(harness: str, home: Path | None = None) -> str:
+    """Install/refresh the packaged agora-channels skill into the harness's
+    skills directory, so "start agora protocol" works with ZERO manual
+    copying (operator finding, 2026-07-14: the guide's four-cp install
+    block was unacceptable — machine setup must be `agora setup` + `agora
+    up`, nothing else). Overwrites on every setup run, which is the point:
+    the skill on disk always matches the installed agora version instead
+    of drifting. Returns a one-line ledger detail; never raises."""
+    from importlib import resources
+
+    target = (home or Path.home()) / _SKILL_DIRS[harness]
+    try:
+        pkg = resources.files("agora.skill")
+        target.mkdir(parents=True, exist_ok=True)
+        for name in ("SKILL.md", "agora_protocol.py"):
+            (target / name).write_text((pkg / name).read_text())
+        return f"skill: installed agora-channels at {target}"
+    except Exception as exc:  # never block seat wiring on the skill copy
+        return (f"skill: could not install at {target} ({exc}) — copy "
+                "src/agora/skill/ there manually")
+
+
 def _resolve_agora_command() -> str:
     """Absolute path to the `agora` CLI for hook commands: hook processes get
     the harness's environment, not the operator's shell PATH (same trap

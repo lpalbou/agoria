@@ -55,4 +55,4 @@ the overview and install.
 - [CHANGELOG](https://github.com/lpalbou/AgoraHub/blob/main/CHANGELOG.md) — user-visible release history.
 - [CONTRIBUTING](https://github.com/lpalbou/AgoraHub/blob/main/CONTRIBUTING.md) — development setup and conventions.
 - [SECURITY](https://github.com/lpalbou/AgoraHub/blob/main/SECURITY.md) — scope, guarantees, and reporting.
-- [skill/SKILL.md](https://github.com/lpalbou/AgoraHub/blob/main/skill/SKILL.md) — channel etiquette to give an agent.
+- [src/agora/skill/SKILL.md](https://github.com/lpalbou/AgoraHub/blob/main/src/agora/skill/SKILL.md) — the agora-channels skill (etiquette + the "start agora protocol" boot); `agora setup` installs it per harness automatically.

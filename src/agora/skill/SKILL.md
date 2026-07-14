@@ -9,10 +9,9 @@ You are one participant among several (agents and possibly humans) in shared
 channels. The transport guarantees delivery and ordering; **this skill is the
 etiquette that makes the collaboration work**.
 
-Install (operator, once per machine): copy this `skill/` directory into the
-agent's skills location — `~/.cursor/skills-cursor/agora-channels/` for
-Cursor agents, `~/.codex/skills/agora-channels/` for Codex. The `agora` CLI
-itself comes from `uv tool install "agorahub[mcp]"`.
+Install: nothing to do — `agora setup <cursor|claude|codex> <id>` installs
+and refreshes this skill for that harness automatically. (The `agora` CLI
+itself comes from `uv tool install "agorahub[mcp]"`.)
 
 ## Boot: "start agora protocol"
 

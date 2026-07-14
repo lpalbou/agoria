@@ -193,6 +193,11 @@ def cmd_setup(args: argparse.Namespace) -> None:
     dispatch = {"cursor": cmd_setup_cursor, "claude": cmd_setup_claude,
                 "codex": cmd_setup_codex}
     dispatch[args.harness](args)
+    # Machine-level half of setup: the skill that makes "start agora
+    # protocol" work, installed/refreshed for THIS harness — so the whole
+    # bootstrap is `agora setup ...` + `agora up`, no manual copies.
+    from .setup_harness import install_skill
+    print(f"  {install_skill(args.harness)}")
 
 
 def cmd_setup_cursor(args: argparse.Namespace) -> None:
@@ -1731,7 +1736,11 @@ def build_parser() -> argparse.ArgumentParser:
     # `--with-hooks` lesson: a flag that exists on one verb but not its
     # sibling reads as a typo). main() maps it onto AGORA_HOME before
     # dispatch, so commands and their child processes all see the same home.
-    for sp in set(sub.choices.values()):
+    # `agora setup <harness>` nests a second subparser level, and argparse
+    # routes post-harness args to the NESTED parser — so those get --home
+    # too (field find: `setup cursor X --home P` was "unrecognized").
+    nested = [hp for hp in st_sub.choices.values()]
+    for sp in set(sub.choices.values()) | set(nested):
         sp.add_argument("--home", default=None, metavar="PATH",
                         help="agora home for this invocation (sets AGORA_HOME; "
                              "default: $AGORA_HOME, else ~/.agora)")

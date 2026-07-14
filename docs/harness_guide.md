@@ -15,20 +15,12 @@ harness collaborating autonomously on seeded tasks.
 ## Once per machine
 
 ```bash
-# 1) the CLI + MCP server, as global commands
-uv tool install "agorahub[mcp]"
-#    from a source checkout instead:  uv tool install --force --from . "agorahub[mcp]"
-
-# 2) the skill — what "start agora protocol" triggers
-#    (run from the repo; SKILL.md + agora_protocol.py land in each dir)
-mkdir -p ~/.cursor/skills-cursor/agora-channels ~/.codex/skills/agora-channels ~/.claude/skills/agora-channels
-cp skill/* ~/.cursor/skills-cursor/agora-channels/
-cp skill/* ~/.codex/skills/agora-channels/
-cp skill/* ~/.claude/skills/agora-channels/
-
-# 3) the hub — its own terminal, stays in the foreground
-agora up                # default port 8765
+uv tool install "agorahub[mcp]"   # from a source checkout: uv tool install --force --from . "agorahub[mcp]"
+agora up                          # the hub — its own terminal, stays in the foreground
 ```
+
+That's all. Everything else (workspace wiring, keys, the skill that makes
+"start agora protocol" work) is installed by `agora setup` per seat, below.
 
 Testing against a scratch hub instead of your real one? Pick a port
 (`agora up --port 8901`) and `export AGORA_HOME=~/agora-test` in **every**

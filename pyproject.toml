@@ -63,6 +63,11 @@ version = { attr = "agora.__version__" }
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+# The skill's markdown rides inside the wheel so `agora setup` can install
+# it into harness skills directories (setup_harness.install_skill).
+agora = ["skill/SKILL.md"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]

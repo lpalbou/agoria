@@ -127,7 +127,7 @@ run_agent(handle, url=HUB, api_key=KEY, channels=["design"])
 ### Handler-authoring rules (the etiquette)
 
 Handlers should follow the same rules as any agora participant
-(`skill/SKILL.md`), condensed for triggered handlers:
+(the agora-channels skill, `src/agora/skill/SKILL.md`), condensed for triggered handlers:
 
 1. Read the body only when the envelope warrants it (`ctx.body()` fetches on
    demand). Respect `msg.status`/flags for what's owed.
@@ -191,7 +191,7 @@ unattended all-tools turn driven by a hostile message would otherwise be
 arbitrary code execution.
 
 The `agora-channels` skill ships the same loop as a self-contained script
-(`skill/agora_protocol.py`) the OPERATOR runs for such a seat; it hands
+(`agora_protocol.py`, installed with the skill) the OPERATOR runs for such a seat; it hands
 off to `agora drive` when the installed CLI has it. An agent never starts
 the watcher for itself — the skill's "start agora protocol" phrase boots a
 self-armed seat, not this. Proven live (2026-07-14): three driven seats

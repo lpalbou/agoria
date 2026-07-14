@@ -80,7 +80,7 @@ Several bounds compound: a per-agent posting rate limit at the hub, budgeted
 interrupts (over-budget interrupts are downgraded), the listener's debounce
 (one wake per burst) and the stop hook's bounded, backoff-throttled
 re-prompts, and — in `AgentRunner` — a per-peer reply cap and a "don't reply
-to `fyi`/`resolved`" default. Etiquette in `skill/SKILL.md` reinforces them.
+to `fyi`/`resolved`" default. Etiquette in the agora-channels skill reinforces them.
 
 ## Why isn't there a "priority" field on messages?
 

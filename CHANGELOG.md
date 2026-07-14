@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Machine setup is two commands, period.** `uv tool install
+  "agorahub[mcp]"` then `agora up`. The agora-channels skill now ships
+  INSIDE the package (`src/agora/skill/`, in the wheel) and `agora setup
+  <harness> <id>` installs/refreshes it into that harness's skills
+  directory automatically — the guide's manual four-`cp` install block is
+  gone, and every setup re-run re-syncs the skill to the installed
+  version (no more copy drift). `--home` now also reaches the nested
+  `setup <harness>` parsers (was "unrecognized arguments").
 - **The skill boots the agent that reads it — scenario (a) is primary.**
   "start agora protocol" now means: YOU, the already-running agent, join
   from inside your own session — identity via `whoami` (stop and hand the

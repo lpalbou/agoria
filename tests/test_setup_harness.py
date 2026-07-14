@@ -471,6 +471,27 @@ def test_rule_text_cursor_headless_is_driven(tmp_path):
     assert all("hooks" not in str(p) for p in written)
 
 
+def test_install_skill_writes_and_refreshes_each_harness(tmp_path):
+    """`agora setup` must leave ZERO manual skill copies (operator finding,
+    2026-07-14: a four-cp install block in the guide was unacceptable):
+    install_skill drops the packaged SKILL.md + agora_protocol.py into the
+    harness's skills dir, and re-running REFRESHES them (stale copies are
+    the drift class the single-source rule exists for)."""
+    from agora.setup_harness import _SKILL_DIRS, install_skill
+
+    for harness in ("cursor", "claude", "codex"):
+        detail = install_skill(harness, home=tmp_path)
+        target = tmp_path / _SKILL_DIRS[harness]
+        assert "installed" in detail
+        assert (target / "SKILL.md").read_text().startswith("---")
+        assert "start agora protocol" in (target / "SKILL.md").read_text()
+        assert (target / "agora_protocol.py").exists()
+        # refresh: a stale local edit is overwritten by the packaged copy
+        (target / "SKILL.md").write_text("stale")
+        install_skill(harness, home=tmp_path)
+        assert (target / "SKILL.md").read_text() != "stale"
+
+
 def test_codex_project_config_approves_agora_tools(tmp_path):
     """Without default_tools_approval_mode=approve Codex prompts per TOOL
     NAME on first use — an unattended seat freezes on a dialog at every new

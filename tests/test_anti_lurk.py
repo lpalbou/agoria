@@ -239,6 +239,63 @@ def test_debrief_fixes_envelope_scope_redelivery_and_waiting_on(client, room):
     assert {w["seat"] for w in owed["waiting_on"]} == {"bystander"}
 
 
+def test_stewardship_stale_claim_alerts_address_the_delegate(client, room):
+    """0084: a claim untouched past its channel SLA produces ONE coalesced
+    hub-alert ADDRESSED to the reporting delegate (addressed = the wake
+    path that works; broadcast alerts decay on a bare read). Touching the
+    claim row is the progress receipt that ends the episode. No delegate,
+    no alert."""
+    service = client.app.state.service
+
+    # A claim, then age it past the SLA by backdating the store row.
+    key = room["named"]
+    client.put("/channels/canvass/store/claim:build-x", headers=_auth(key),
+               json={"value": {"owner": "named"}, "expect_version": 0})
+    service.db._conn.execute(
+        "UPDATE store SET updated_at = updated_at - 7200 "
+        "WHERE channel='canvass' AND key='claim:build-x'")
+    service.db._conn.commit()
+
+    # No reporting delegate yet: sweep stays silent.
+    assert service._steward_sweep() == []
+
+    # Grant reporting to bystander; the sweep now alerts, addressed.
+    client.put("/admin/delegation", headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+               json={"agent_id": "bystander", "powers": ["reporting"]})
+    out = service._steward_sweep()
+    assert out and out[0].startswith("stale-claims:")
+    alerts = service.db.get_messages("hub-alerts", 0, 50)
+    alert = next(m for m in reversed(alerts) if "STALE CLAIMS" in m.body)
+    assert alert.to == ["bystander"] and alert.status.value == "open"
+    assert "canvass/claim:build-x" in alert.body and "owner named" in alert.body
+
+    # Same episode never re-alerts within the flap window...
+    assert service._steward_sweep() == []
+    # ...and touching the claim row (the progress receipt) ends the episode.
+    client.put("/channels/canvass/store/claim:build-x", headers=_auth(key),
+               json={"value": {"owner": "named", "note": "progress"}})
+    assert service._steward_sweep() == []
+    assert service._stale_claim_alerted == {}
+
+
+def test_fleet_status_gated_to_operators_and_reporting_delegates(client, room):
+    """0084: GET /status serves the operator overview to reporting delegates
+    (the steward could not see lurk metrics behind the admin key), with
+    refusal details redacted for non-operators (they carry private channel
+    names and verbatim errors)."""
+    r = client.get("/status", headers=_auth(room["named"]))
+    assert r.status_code == 403 and "reporting" in r.json()["detail"]
+
+    client.put("/admin/delegation", headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+               json={"agent_id": "named", "powers": ["reporting"]})
+    r = client.get("/status", headers=_auth(room["named"]))
+    assert r.status_code == 200
+    rows = r.json()
+    assert any(row["agent_id"] == "asker" for row in rows)
+    assert all("acked_unanswered" in row and "last_refusal" not in row
+               for row in rows)
+
+
 def test_overview_counts_acked_unanswered(client, room):
     msg = _post(client, room["asker"], status="open", title="for named",
                 asks=[{"id": "1", "text": "row", "to": ["named"]}])

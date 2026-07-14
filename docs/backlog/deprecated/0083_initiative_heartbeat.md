@@ -1,6 +1,18 @@
 # 0083 — Initiative heartbeat (`--idle-nudge`)
 
-- **State:** completed (2026-07-14)
+- **State:** DEPRECATED (2026-07-14, same day it shipped) — withdrawn by
+  the operator ("that's terrible engineering") and confirmed by a 10-cycle
+  adversarial review: a clock-driven, uninformed synthetic wake is the
+  lurker anti-pattern in initiative costume (seats converge to "nothing
+  worth doing" one-liners or manufactured busywork), and it put
+  scheduling policy inside the transport listener. Superseded by 0084
+  (stewardship: claims discipline + delegate loop + addressed stale-claim
+  alerts). The flag remains an accepted NO-OP in the CLI because
+  0.10.4-generated rules teach it — hard removal would make every re-arm
+  fail with `unrecognized arguments` (the c2095 failure class). Original
+  record below, preserved verbatim.
+
+- **Original state:** completed (2026-07-14)
 - **Origin:** the operator, hours after the anti-lurk wave landed: "when i
   talk with them, they answer (good), but it feels like they aren't doing
   much if i don't ask them." Verified in hub data: the post-restart

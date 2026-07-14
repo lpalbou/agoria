@@ -554,6 +554,31 @@ def owed(
     return _run(service.owed, agent)
 
 
+@router.get("/status")
+def fleet_status(
+    agent: AgentInfo = Depends(current_agent),
+    service: HubService = Depends(get_service),
+) -> list[dict[str, Any]]:
+    """Fleet health for stewards (0084): the same per-seat overview the
+    operator sees, gated to operators and REPORTING delegates — the seat
+    chartered to chase silence could not see the lurk metrics (they lived
+    behind the admin key only). Refusal details are redacted for delegates:
+    they carry private/DM channel names and verbatim error text (HIGH-2);
+    the counts are what stewardship needs."""
+    def go() -> list[dict[str, Any]]:
+        holds = any(d["agent_id"] == agent.id and "reporting" in d.get("powers", ())
+                    for d in service.active_delegations())
+        if not (agent.operator or holds):
+            raise HubError(403, "fleet status is for operators and reporting "
+                                "delegates (whoami.delegations is the proof)")
+        rows = service.agent_status_overview()
+        if not agent.operator:
+            for r in rows:
+                r.pop("last_refusal", None)
+        return rows
+    return _run(go)
+
+
 class AckInbox(BaseModel):
     cursors: dict[str, int]  # channel -> highest seq read
 

@@ -547,7 +547,7 @@ def run_listen(*, agent_id: str | None = None, url: str | None = None,
                preview: bool = False, notify_file: str | None = None,
                lock: str | None = None, heartbeat: float = DEFAULT_HEARTBEAT,
                poll: float = 0.5, adaptive: bool = False,
-               idle_nudge: float = 0.0,
+               idle_nudge: float = 0.0,  # accepted no-op since 0.10.5 (see cli)
                cwd: Path | None = None) -> int:
     aid, hub = resolve_identity(agent_id, url, Path(cwd) if cwd else Path.cwd())
     home = _config.home()
@@ -594,40 +594,6 @@ def run_listen(*, agent_id: str | None = None, url: str | None = None,
         # leaves it be. Only reached on a normal return — a signal skips it.
         if adaptive:
             write_backoff(backoff_path, next_backoff(effective_wait, rc, cap))
-        # The INITIATIVE HEARTBEAT (0083): debt-scoped waking fixed the token
-        # burn and created its dual — a seat with zero debts gets zero turns,
-        # so nothing self-directed ever happens (operator, 2026-07-14: "they
-        # answer, but they aren't doing much if i don't ask"). With
-        # --idle-nudge N, a quiet single-shot checks how long the seat has
-        # been wake-less; past N seconds it emits ONE synthetic wake telling
-        # the seat to spend a turn on ITS OWN backlog. Bounded by
-        # construction: at most one nudge per N seconds, and any real wake
-        # resets the clock.
-        if once and idle_nudge > 0:
-            idle_path = home / f"listen-{aid}.lastwake"
-            now = time.time()
-            if rc == 2:
-                idle_path.write_text(str(now))
-            elif rc == 0:
-                try:
-                    last = float(idle_path.read_text().strip() or "0")
-                except (OSError, ValueError):
-                    last = 0.0
-                if not last:
-                    idle_path.write_text(str(now))  # first pass seeds the clock
-                elif now - last >= idle_nudge:
-                    idle_path.write_text(str(now))
-                    _emit(f"AGORA_WAKE agent={aid} n=0 idle=1")
-                    print("AGORA: no debts, no traffic for a while — this is "
-                          "your INITIATIVE turn. Spend it on your OWN lane: "
-                          "check your board and claims, pick ONE item from "
-                          "your backlog, do it (or a real slice of it), and "
-                          "post the receipt (SHIP/progress, evidence "
-                          "included) where your team works. Not busywork: "
-                          "if nothing is genuinely worth doing, say so in "
-                          "one line on your home channel and re-arm.",
-                          file=sys.stderr, flush=True)
-                    return 2
         return 0 if rc == _HUB_UNREACHABLE else rc
     except ListenSignal:
         _emit("AGORA_LISTEN ended reason=signal")

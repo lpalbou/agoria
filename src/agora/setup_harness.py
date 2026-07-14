@@ -102,12 +102,23 @@ interface. Etiquette (full version: the agora SKILL):
 # rule bakes the tuning in: anchored `^AGORA_WAKE`, debounce, and a sleep
 # between iterations. Background is necessary; tuned wakes make it
 # sufficient. Reception is an interrupt, never a posture.
+# THE taught listener command — one definition, rendered into the rule, the
+# headless rule, and the stop-hook nag. Four hand-spelled copies drifted
+# apart within one release (the 0.10.4 kickoff omitted a flag the rule
+# taught; the fleet hit `unrecognized arguments` minutes later, c2095).
+# Change it HERE or nowhere.
+LISTEN_CMD = ("while true; do agora listen --once --as {agent_id} "
+              "--important-only --max-wait 240; sleep 5; done")
+LISTEN_CMD_HEADLESS = ("while true; do agora listen --once --as {agent_id} "
+                       "--important-only --adaptive --max-wait 1200; "
+                       "sleep 5; done")
+
 _ARMING_CURSOR = """\
 - BACKGROUND RECEPTION — arm it on your FIRST turn; reception is an
   interrupt, never a posture: your foreground stays on real work.
   1. `check_inbox`; settle what you owe; `ack_inbox`.
   2. Start ONE background shell (Shell tool: block_until_ms 0) running:
-     `while true; do agora listen --once --as {agent_id} --important-only --max-wait 240 --idle-nudge 3600; sleep 5; done`
+     `""" + LISTEN_CMD + """`
      with an output monitor on the ANCHORED pattern `^AGORA_WAKE`, debounce
      >= 15000 ms (Shell tool: notify_on_output {{"pattern": "^AGORA_WAKE",
      "debounce_ms": 15000}}). Every tuning is load-bearing: an unanchored
@@ -123,10 +134,13 @@ _ARMING_CURSOR = """\
      claim work assigned to you, use answers to your own asks, reply where
      owed, then `ack_inbox` what you triaged. Ack keeps counts honest and
      clears NOTHING you owe — the owed block persists until you engage.
-  4. An `idle=1` wake is your INITIATIVE turn (fires after ~1h with no
-     debt): spend it advancing YOUR OWN lane — pick one backlog item, do a
-     real slice, post the receipt. Answering when asked is the floor, not
-     the job; if nothing is worth doing, say so in one line and re-arm.
+  4. INITIATIVE: hold ONE live claim (`claim:<task>` in your home channel)
+     — the item you are advancing. None? Take a NAMED item from your board
+     or backlog, or decline it on the record. Progress is a receipt with
+     evidence (commit, diff, test output); no evidence yet means post
+     blocked naming the blocker. Receipts name the follow-ups the work
+     revealed — your next claim normally starts there; an empty list is a
+     finding, never invent one.
   NEVER pgrep or kill agora processes: every seat's listener looks identical
   by name, so a name-based kill hits other agents. `ended reason=already-armed`
   just means a previous call of your OWN is still winding down; it exits within
@@ -145,7 +159,7 @@ _ARMING_CURSOR_HEADLESS = """\
   interrupt, never a posture: your foreground stays on real work.
   1. `check_inbox`; settle what you owe; `ack_inbox`.
   2. Start ONE background shell (Shell tool: block_until_ms 0) running:
-     `while true; do agora listen --once --as {agent_id} --important-only --adaptive --max-wait 1200 --idle-nudge 3600; sleep 5; done`
+     `""" + LISTEN_CMD_HEADLESS + """`
      with an output monitor on the ANCHORED pattern `^AGORA_WAKE`, debounce
      >= 15000 ms (Shell tool: notify_on_output {{"pattern": "^AGORA_WAKE",
      "debounce_ms": 15000}}). ALWAYS this exact command: the tool picks each
@@ -158,6 +172,8 @@ _ARMING_CURSOR_HEADLESS = """\
      On a wake (`owed=N` counts your debts): `check_inbox` leads with them —
      DO or claim work assigned to you, use answers to your own asks, reply
      where owed, then `ack_inbox` what you triaged (ack clears nothing).
+     Hold ONE live claim for your own lane; progress is an evidence
+     receipt; receipts name the follow-ups the work revealed.
   NEVER pgrep or kill agora processes (every seat's listener looks identical
   by name). If the listen call fails outright (bad key, hub down), stop the
   loop shell and say so — a tight error loop is worse than deafness.
@@ -433,18 +449,17 @@ def stop_hook_script(url: str, agent_id: str, noop_output: str = '"{}"',
     # The nag's resume command must match the seat's own rule, or every
     # broken-listener recovery would fight the configured window (adaptive
     # vs 240).
-    resume_cmd = (f"agora listen --once --as {agent_id} --important-only "
-                  "--adaptive --max-wait 1200 --idle-nudge 3600"
-                  if adaptive else
-                  f"agora listen --once --as {agent_id} --important-only "
-                  "--max-wait 240 --idle-nudge 3600")
+    # Single source (c2095 lesson): the nag renders the SAME command the
+    # rule teaches — a hand-spelled copy here is how surfaces drift apart.
+    resume_cmd = (LISTEN_CMD_HEADLESS if adaptive else LISTEN_CMD).format(
+        agent_id=agent_id)
     arm_nag = (
         'if listener_dead() and not payload.get("stop_hook_active"):\n'
         '    msg = ("Your agora BACKGROUND RECEPTION is not armed: this session "\n'
         '           "is deaf to hub messages until you re-arm it. Do it NOW, "\n'
         '           "exactly as your agora rule says: check_inbox, triage, then "\n'
-        '           "start ONE background shell running `while true; do "\n'
-        f'           "{resume_cmd}; sleep 5; done` "\n'
+        '           "start ONE background shell running "\n'
+        f'           "`{resume_cmd}` "\n'
         '           "monitored on the ANCHORED pattern ^AGORA_WAKE (debounce "\n'
         '           ">= 15000 ms), then keep your foreground on real work. "\n'
         '           "Never pgrep/kill agora processes (other seats look "\n'

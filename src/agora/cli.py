@@ -1378,12 +1378,18 @@ def build_parser() -> argparse.ArgumentParser:
                          "1200s) when idle; state in listen-<id>.backoff. A "
                          "message returns instantly regardless, so wide idle "
                          "windows cost no latency, only fewer empty inferences")
+    # Accepted NO-OP since 0.10.5: the synthetic "initiative wake" was
+    # withdrawn (clock-driven uninformed turns are the lurker anti-pattern
+    # in initiative costume; initiative now rides claims + the delegate's
+    # addressed asks — backlog 0083, deprecated). The flag stays parseable
+    # because 0.10.4-generated rules teach it: a hard removal would make
+    # every re-arm fail with `unrecognized arguments` (the c2095 class).
+    # Deliberately silent at runtime: in --once mode stderr IS the wake
+    # payload some harnesses read.
     ln.add_argument("--idle-nudge", dest="idle_nudge", type=float, default=0.0,
-                    help="--once: after S seconds without ANY wake, emit one "
-                         "synthetic initiative wake (exit 2, idle=1) telling "
-                         "the seat to spend a turn on its own backlog — at "
-                         "most one per S seconds; a real wake resets the "
-                         "clock (default: off)")
+                    help="deprecated no-op since 0.10.5 (the initiative "
+                         "heartbeat was withdrawn; safe to keep in old "
+                         "rules, remove at your next setup regen)")
     ln.add_argument("--debounce", type=float, default=15.0,
                     help="coalesce a burst into ONE wake sentinel (default 15s)")
     ln.add_argument("--important-only", dest="important_only", action="store_true",

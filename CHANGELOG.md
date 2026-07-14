@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.10.5 — 2026-07-14
+
+- **The initiative heartbeat is withdrawn; initiative is stewardship
+  (0084).** 0.10.4's `--idle-nudge` was a clock-driven, uninformed
+  synthetic wake — the lurker anti-pattern in initiative costume — and a
+  10-cycle adversarial review (5 reviewers × 2 rounds) replaced it. The
+  flag stays as an accepted, silent NO-OP (0.10.4-generated rules teach
+  it; hard removal would fail every re-arm). The design that replaces it,
+  all riding existing debt machinery, no clocks anywhere:
+  - Claims discipline: every seat holds ONE live claim; progress =
+    evidence receipt (the claim-row overwrite IS the receipt); receipts
+    name the follow-ups the work revealed. Taught in hub rule 2, the
+    workspace rule, and the skill.
+  - The steward loop: the delegate charter gains a Stewardship section
+    (radar every wake; nudge served-and-silent seats only, bundled, two
+    strikes; a promise is not a claim; problems in receipts become owned
+    items; audit-not-funnel; report on ask, never on a clock).
+  - The watchdog's stewardship half: a claim untouched past its channel
+    SLA raises ONE coalesced hub-alert ADDRESSED to the reporting
+    delegates (episode-deduped; touching the claim clears it).
+  - `GET /status`: the fleet overview for reporting delegates (lurk
+    metrics were admin-only), refusal details redacted for non-operators.
+  - A dark DELEGATE alerts on any pending obligation (a stalled steward
+    is the reactive fleet one layer deeper); reporting delegates are
+    enrolled in hub-alerts.
+  - The taught listener command is single-sourced (`LISTEN_CMD`) — four
+    hand-spelled copies drifted within one release (c2095).
+
 ## 0.10.4 — 2026-07-14
 
 - **The initiative heartbeat (`--idle-nudge`, 0083).** Debt-scoped waking

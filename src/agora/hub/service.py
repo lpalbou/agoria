@@ -119,6 +119,8 @@ class HubService:
         # In-memory by design: a hub restart re-alerts once, which is honest.
         self._dark_since: dict[str, float] = {}
         self._dark_alerted_at: dict[str, float] = {}
+        # Stewardship episodes (0084): (channel, claim-key) -> last alert ts.
+        self._stale_claim_alerted: dict[tuple[str, str], float] = {}
         # Pause state cache (0069) + last long-pause reminder timestamp.
         self._pause_cache: dict[str, Any] | None = None
         self._pause_cache_at = 0.0
@@ -726,10 +728,15 @@ class HubService:
                                 f"first: fs_read '{CHARTER_PATH}' in "
                                 f"'{channel}' (v{row['version']}), then retry")
 
-    def _post_system(self, channel: str, body: str) -> None:
+    def _post_system(self, channel: str, body: str,
+                     to: list[str] | None = None) -> None:
+        # `to` lets an alert ADDRESS its steward (0084): an addressed
+        # message rides the to-me wake path and the owed ledger — a
+        # broadcast alert would unpin on a bare read and decay.
         message = self.db.insert_message(
-            channel, "hub", kind=Kind.system.value, status="fyi", urgency="inbox",
-            title="", body=body, data=None, reply_to=None,
+            channel, "hub", kind=Kind.system.value,
+            status="open" if to else "fyi", urgency="inbox",
+            title="", body=body, data=None, reply_to=None, to=to or [],
         )
         self._wake(message)
 
@@ -1956,12 +1963,20 @@ class HubService:
         reserved name (create_channel refuses it) because a squatter owning
         the room would read and control operator alerts (review HIGH-1).
         Operators are (re)added on every sweep so late-registered operators
-        still receive alerts."""
+        still receive alerts. Reporting delegates are enrolled too (0084):
+        stewardship alerts must be able to ADDRESS the steward — an
+        addressed message is the wake path proven to work — and alert texts
+        already redact private-channel names (HIGH-2), so the wider
+        audience leaks nothing new."""
         if self.db.get_channel(self.DARK_ALERTS_CHANNEL) is None:
             self.db.create_channel(self.DARK_ALERTS_CHANNEL, private=True,
                                    created_by="hub", add_owner=False)
         for op in self.operator_ids():
             self.db.add_member(self.DARK_ALERTS_CHANNEL, op, role="member")
+        for d in self.active_delegations():
+            if "reporting" in d.get("powers", ()):
+                self.db.add_member(self.DARK_ALERTS_CHANNEL, d["agent_id"],
+                                   role="member")
 
     def dark_sweep(self) -> list[str]:
         """One watchdog pass (0067): alert the operator ONCE per (agent,
@@ -1999,6 +2014,15 @@ class HubService:
             envelopes = self.inbox(AgentInfo(id=agent_id, name=agent_id))
             overdue = [e for e in envelopes if e.escalated
                        and e.status in (Status.open, Status.blocked)]
+            # A dark DELEGATE is the reactive fleet one layer deeper (0084):
+            # everything it stewards stalls silently. Alert on ANY pending
+            # obligation it holds, not just escalated ones — the operator
+            # should hear before the fleet's SLA does.
+            holds_delegation = any(
+                d["agent_id"] == agent_id for d in self.active_delegations())
+            if not overdue and holds_delegation:
+                overdue = [e for e in envelopes
+                           if e.status in (Status.open, Status.blocked)]
             if not overdue:
                 continue
             dark_now.add(agent_id)
@@ -2034,7 +2058,69 @@ class HubService:
         for agent_id in list(self._dark_since):
             if agent_id not in dark_now:
                 del self._dark_since[agent_id]
+        alerted.extend(self._steward_sweep())
         return alerted
+
+    def _steward_sweep(self) -> list[str]:
+        """Stewardship half of the watchdog (0084): a claim whose row has
+        not been touched past its channel SLA is work going quietly stale —
+        exactly what the reporting delegate exists to chase, and exactly
+        what it cannot see without a turn. One coalesced alert per sweep,
+        ADDRESSED to the reporting delegates (addressed = the wake path
+        that provably works; the claim-row overwrite is the progress
+        receipt, so touching the claim ends its episode). Episode-deduped
+        like AGENT DARK: one alert per (channel, claim) episode, re-alert
+        only after the flap window. No delegates -> no scan, no alert (the
+        operator's own board shows staleness anyway)."""
+        stewards = sorted({d["agent_id"] for d in self.active_delegations()
+                           if "reporting" in d.get("powers", ())})
+        if not stewards:
+            return []
+        now = time.time()
+        fresh: list[str] = []
+        live: set[tuple[str, str]] = set()
+        for ch in self.db.channel_names():
+            sla_s = self.channel_sla(ch) * 60.0
+            for entry in self.db.store_keys(ch):
+                key = entry["key"]
+                if not key.startswith("claim:"):
+                    continue
+                stored = self.db.store_get(ch, key)
+                if stored is None or not isinstance(stored.value, dict):
+                    continue
+                if stored.value.get("done"):
+                    continue
+                age = now - stored.updated_at
+                if age <= sla_s:
+                    continue
+                ep = (ch, key)
+                live.add(ep)
+                if now - self._stale_claim_alerted.get(ep, 0.0) < DARK_REALERT_SECONDS:
+                    continue
+                self._stale_claim_alerted[ep] = now
+                owner = str(stored.value.get("owner", "?"))
+                # Redact private channels like every alert (HIGH-2).
+                info = self.db.get_channel(ch)
+                shown = (f"{ch}/{key}" if info is not None and not info.private
+                         else "a private-channel claim")
+                fresh.append(f"{shown} (owner {owner}, idle {age / 60:.0f}m)")
+        # Episodes end when the claim is touched, finished, or its row ages
+        # back under the SLA (channel SLA raised).
+        for ep in list(self._stale_claim_alerted):
+            if ep not in live:
+                del self._stale_claim_alerted[ep]
+        if fresh:
+            self._ensure_alerts_channel()
+            self._post_system(
+                self.DARK_ALERTS_CHANNEL,
+                "STALE CLAIMS (stewardship): " + "; ".join(fresh[:8])
+                + (f" (+{len(fresh) - 8} more)" if len(fresh) > 8 else "")
+                + ". Canvass the owners per your charter: one bundled ask "
+                  "per seat, or reassign via the queue. Touching the claim "
+                  "row is the progress receipt that clears this.",
+                to=stewards)
+            return [f"stale-claims:{len(fresh)}"]
+        return []
 
     async def dark_watchdog(self, interval_seconds: float = 300.0) -> None:
         """Background loop for dark_sweep (started by the app lifespan;

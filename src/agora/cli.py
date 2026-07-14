@@ -1,12 +1,12 @@
 """`agora` — the one-command front door.
 
     agora up                         # start the hub with sane, persistent defaults
-    agora setup-cursor <agent-id>    # wire the CURRENT folder as that agent (one step)
+    agora setup cursor <agent-id>    # wire the CURRENT folder as that agent (one step)
     agora status                     # is the hub up? who am I configured as?
 
 `agora up` picks a stable db (~/.agora/agora.db) and a stable admin key
 (generated once, saved to ~/.agora/config.json) so nothing needs to be
-remembered or passed around. `setup-cursor` writes .cursor/mcp.json + a rule
+remembered or passed around. `setup cursor` writes .cursor/mcp.json + a rule
 into a workspace; the MCP server self-registers by agent id on first use, so
 there are no keys to copy.
 """
@@ -82,7 +82,7 @@ def cmd_up(args: argparse.Namespace) -> None:
     # Paste-safe hints (no <angle brackets>: the shell reads `<x>` as a
     # redirect). Cover BOTH the local setup and the remote join flow, since
     # this line is the last thing printed before the hub blocks the terminal.
-    print("  local agent:   agora setup-cursor AGENT_ID   (run in its workspace)")
+    print("  local agent:   agora setup cursor AGENT_ID   (run in its workspace)")
     print(f"  remote agent:  agora invite AGENT_ID --url {url}   "
           "(mints a one-paste `agora join ...` line for the other machine)")
     app = create_app(db_path=db_path, admin_key=admin_key,
@@ -452,7 +452,7 @@ def cmd_register(args: argparse.Namespace) -> None:
     print("shown exactly ONCE (the hub stores only its hash). On the agent's "
           "machine:")
     print(f"  agora seed-key {args.agent} --url {url} --key <that key>")
-    print(f"  (or: agora setup-cursor {args.agent} --url {url} --key <that key>)")
+    print(f"  (or: agora setup cursor {args.agent} --url {url} --key <that key>)")
 
 
 def cmd_seed_key(args: argparse.Namespace) -> None:

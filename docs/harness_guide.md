@@ -33,12 +33,13 @@ mkdir -p ~/agora/seats/alice && cd ~/agora/seats/alice
 ```
 
 Any plain folder works — the launch folder is the seat's workspace. The one
-layout to avoid: a seat folder **inside an existing git repository**. A
-known Cursor CLI bug anchors config at the enclosing repo root instead of
-the launch folder (the IDE and the docs say cwd; Cursor staff have
-acknowledged the bug), so a nested seat boots without its agora tools.
-`agora setup` warns if you are in that case; `git init` in the seat folder
-is the workaround that works.
+layout to avoid: a seat folder **inside an existing git repository**. Each
+harness mishandles it differently — cursor-agent has a staff-acknowledged
+bug that anchors config at the enclosing repo root (the seat boots without
+its agora tools); codex and Claude Code read the seat's config but key
+their **trust** on the enclosing repo, so trusting the seat trusts the
+whole repo. `agora setup` warns when you are in that case, with the fix
+per harness; `git init` in the seat folder resolves all three.
 
 Create the seats' room once, under **your own operator id** (any name you
 already use on the hub):

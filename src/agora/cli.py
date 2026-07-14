@@ -308,7 +308,7 @@ def cmd_setup_claude(args: argparse.Namespace) -> None:
     else:
         print("Run `claude` in this folder and approve the 'agora' MCP "
               "server (/mcp).")
-    _warn_if_not_project_root(workspace, args.agent)
+    _warn_if_not_project_root(workspace, args.agent, harness="claude")
     _print_kickoff(args.agent, url, standing_loop=False, harness="claude")
 
 
@@ -359,7 +359,7 @@ def cmd_setup_codex(args: argparse.Namespace) -> None:
     print("Note: Codex has no idle-wake surface; the Stop hook drains bursts at "
           "turn ends, otherwise messages wait for the next turn (that is "
           "expected). Harnesses with a wake surface use `agora listen`.")
-    _warn_if_not_project_root(workspace, args.agent)
+    _warn_if_not_project_root(workspace, args.agent, harness="codex")
     if dedicated:
         # The standing loop IS this seat's reachability; the kickoff says so.
         _print_kickoff(args.agent, url, standing_loop=True)
@@ -369,25 +369,37 @@ def cmd_setup_codex(args: argparse.Namespace) -> None:
         _print_kickoff(args.agent, url, standing_loop=False, harness="codex")
 
 
-def _warn_if_not_project_root(workspace: Path, agent_id: str) -> None:
+def _warn_if_not_project_root(workspace: Path, agent_id: str,
+                              harness: str = "cursor") -> None:
     """Warn ONLY for the nested-in-another-repo layout. A standalone folder
     is the normal case and needs nothing: the launch folder is the
-    workspace (verified A/B 2026-07-14 and per Cursor's own docs). The
-    nested case is a staff-acknowledged Cursor CLI bug — config anchors at
-    the enclosing repo root and the seat's own .cursor/ is ignored
-    (forum.cursor.com/t/150169; --workspace did NOT fix it in our A/B;
-    `git init` in the seat folder did). Codex merges nested config
-    correctly but anchors TRUST at the enclosing repo root, so isolation
-    is better with an own .git there too."""
+    workspace. Three harnesses, three verified models (A/B + docs
+    fact-check, 2026-07-14):
+    - cursor-agent: a staff-acknowledged CLI bug anchors config at the
+      enclosing repo root; the seat's own .cursor/ is ignored
+      (forum.cursor.com/t/150169; --workspace did NOT fix it in our A/B;
+      `git init` in the seat folder did).
+    - codex: documented walk-up to the nearest .git; nested config merges
+      (closest wins) but TRUST keys on the resolved root — the whole
+      enclosing repo gets trusted.
+    - claude: settings/.mcp.json are cwd-only (nested seat works), but
+      workspace trust is keyed on the git repo root too."""
     if (workspace / ".git").exists():
         return
     git_root = next((p for p in workspace.parents if (p / ".git").exists()), None)
-    if git_root is not None:
-        print(f"WARNING: '{workspace}' sits inside the git repo '{git_root}'."
-              " A known Cursor CLI bug anchors project config there, so this"
-              " seat would boot WITHOUT its agora tools; codex would widen"
-              " trust to the whole enclosing repo. Fix: `git init` in this"
-              " folder (or move the seat outside the repo).")
+    if git_root is None:
+        return
+    detail = {
+        "cursor": ("a known Cursor CLI bug anchors project config there, so "
+                   "this seat would boot WITHOUT its agora tools"),
+        "codex": ("codex will key the trust prompt on that repo — trusting "
+                  "this seat means trusting the WHOLE enclosing repo"),
+        "claude": ("Claude Code reads this folder's config fine, but its "
+                   "workspace trust is keyed on that enclosing repo"),
+    }[harness]
+    print(f"WARNING: '{workspace}' sits inside the git repo '{git_root}': "
+          f"{detail}. Fix: `git init` in this folder (or move the seat "
+          "outside the repo).")
 
 
 # -- operator verbs for remote onboarding (register / seed-key) ---------------

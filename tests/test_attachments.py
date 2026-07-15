@@ -324,6 +324,53 @@ def test_ledger_commits_to_attachment_identity(http):
     assert turn["data"]["attachments"][0]["id"] == up.json()["id"]
 
 
+# -- agent-visible rendering (adversarial-eval P0, 2026-07-16) --------------------
+
+
+def test_rendered_envelope_names_attachments_and_fetch_verb(service, team):
+    """The hub delivered refs on every envelope but neither renderer showed
+    them — the feature was INVISIBLE to recipients (eval P0). The rendered
+    triage text must name the file, its declared type/size, the id, and the
+    fetch verb."""
+    from agora.render import render_envelopes, render_messages
+
+    alice, bob, _ = team
+    meta = service.attachment_put(alice, "design", PNG, filename="shot.png",
+                                  content_type="image/png")
+    m = service.post_message(alice, "design", PostMessage(
+        body="x" * 5000,  # envelope-only for bob: refs must STILL render
+        attachments=[{"id": meta["id"]}]))
+
+    env = next(e for e in service.inbox(bob) if e.attachments)
+    text = render_envelopes([env.model_dump(mode="json")])
+    for token in ("shot.png", "image/png", meta["id"], "read_attachment"):
+        assert token in text, f"envelope render missing {token!r}"
+
+    # Deliberate-read path too — including the worst case, an EMPTY body
+    # whose whole content is the attachment.
+    bare = service.post_message(alice, "design", PostMessage(
+        body="", attachments=[{"id": meta["id"]}]))
+    read = render_messages([bare.model_dump(mode="json")])
+    assert "shot.png" in read and meta["id"] in read
+
+
+def test_dm_surfaces_carry_attachments(http):
+    """Eval P1: the hub accepted DM attachments but no agent-facing DM verb
+    exposed the parameter. The client dm() (which MCP send_dm mirrors) must
+    deliver refs end to end."""
+    alice = _reg(http, "alice")
+    bob = _reg(http, "bob")
+    http.post("/dms/bob", headers=alice)
+    up = http.post("/channels/dm:alice--bob/attachments?filename=spec.pdf",
+                   content=PDF, headers={**alice, "Content-Type": "application/pdf"})
+    sent = http.post("/dms/bob/messages", headers=alice,
+                     json={"body": "review this", "title": "doc",
+                           "attachments": [{"id": up.json()["id"]}]})
+    assert sent.status_code == 200
+    [ref] = sent.json()["data"]["attachments"]
+    assert ref["filename"] == "spec.pdf"
+
+
 # -- serve-type hardening unit matrix ---------------------------------------------
 
 

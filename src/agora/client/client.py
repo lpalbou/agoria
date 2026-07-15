@@ -173,10 +173,14 @@ class AgoraClient:
 
     async def dm(self, peer: str, body: str, *, title: str = "",
                  status: Status = Status.fyi, urgency: Urgency = Urgency.inbox,
-                 data: dict[str, Any] | None = None, reply_to: str | None = None) -> Message:
+                 data: dict[str, Any] | None = None, reply_to: str | None = None,
+                 asks: list[dict[str, Any]] | None = None,
+                 answers: list[str] | None = None,
+                 attachments: list[dict[str, Any]] | None = None) -> Message:
         """Send a direct 1:1 message (channel auto-created on first use)."""
         payload = PostMessage(body=body, title=title, status=status, urgency=urgency,
-                              data=data, reply_to=reply_to)
+                              data=data, reply_to=reply_to, asks=asks,
+                              answers=answers, attachments=attachments)
         row = self._json(await self._http.post(
             f"/dms/{peer}/messages", json=payload.model_dump(mode="json"),
         ))
@@ -257,7 +261,8 @@ class AgoraClient:
         if r.status_code >= 400:
             self._json(r)  # raises with the hub's teaching detail
         headers = {k: r.headers.get(k, "") for k in
-                   ("content-type", "x-declared-content-type", "x-attachment-id")}
+                   ("content-type", "x-declared-content-type", "x-attachment-id",
+                    "content-disposition")}
         return headers, r.content
 
     async def fs_list(self, channel: str, prefix: str = "") -> list[dict[str, Any]]:

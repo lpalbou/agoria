@@ -17,6 +17,7 @@ import argparse
 import contextlib
 import json
 import os
+import re
 import secrets
 import shutil
 import sys
@@ -821,7 +822,12 @@ def cmd_attachment(args):
                   f"--attach {meta['id']} ...")
         else:  # get
             headers, data = await c.attachment_get(a.channel, a.id)
-            target = Path(a.out or headers.get("x-attachment-id", a.id)[:12])
+            # Default the output name from the served Content-Disposition
+            # (the upload-time filename) instead of a bare hash prefix.
+            served = re.search(r'filename="([^"]+)"',
+                               headers.get("content-disposition", ""))
+            target = Path(a.out or (served.group(1) if served
+                                    else headers.get("x-attachment-id", a.id)[:12]))
             target.write_bytes(data)
             print(f"saved {len(data)} bytes -> {target} "
                   f"(declared type: {headers.get('x-declared-content-type', '?')})")
@@ -958,8 +964,17 @@ def cmd_dm(args):
     from .models import Status, Urgency
 
     async def go(c, a):
+        attachments = None
+        if getattr(a, "attach", None):
+            attachments = []
+            for spec in a.attach:
+                blob_id, _, name = spec.partition(":")
+                ref = {"id": blob_id.strip()}
+                if name.strip():
+                    ref["filename"] = name.strip()
+                attachments.append(ref)
         m = await c.dm(a.to, a.body, title=a.title or "", status=Status(a.status),
-                       urgency=Urgency(a.urgency))
+                       urgency=Urgency(a.urgency), attachments=attachments)
         print(f"DM to {a.to} sent: seq {m.seq}")
     _run_agent_cmd(args, go)
 
@@ -1153,6 +1168,10 @@ def cmd_mirror(args):
                     f.write(f"- reply_to: `{m.reply_to}`\n")
                 if data.get("original_date"):
                     f.write(f"- date: {data['original_date']}\n")
+                if isinstance(data.get("attachments"), list) and data["attachments"]:
+                    refs = ", ".join(f"{r.get('filename', '?')} (`{r.get('id', '')[:12]}…`)"
+                                     for r in data["attachments"] if isinstance(r, dict))
+                    f.write(f"- attachments: {refs}\n")
                 f.write("\n" + m.body.rstrip() + "\n\n")
         state[channel] = max(m.seq for m in messages)
 
@@ -1747,7 +1766,11 @@ def build_parser() -> argparse.ArgumentParser:
     dm.add_argument("--to", required=True)
     dm.add_argument("--status", default="fyi", choices=["open", "reply", "fyi", "blocked", "resolved"])
     dm.add_argument("--urgency", default="inbox", choices=["inbox", "next_turn", "interrupt"])
-    dm.add_argument("--title", default=""); dm.add_argument("body")
+    dm.add_argument("--title", default="")
+    dm.add_argument("--attach", action="append", metavar="SHA256[:NAME]",
+                    help="attach an uploaded blob by id (upload to the dm:<a>--<b> "
+                         "channel with `agora attachment put` first)")
+    dm.add_argument("body")
     dm.set_defaults(func=cmd_dm)
 
     ak = _agent_parser("ack", "advance your triage cursor")

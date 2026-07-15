@@ -59,7 +59,12 @@ async def _recent(client: AgoraClient, channel: str) -> list[dict[str, Any]]:
     except Exception:
         return []
     return [{"seq": m.seq, "sender": m.sender, "status": m.status.value,
-             "title": m.title or "", "body": _trim(m.body)} for m in rows]
+             "title": m.title or "", "body": _trim(m.body),
+             **({"attachments": [r.get("filename", "?")
+                                 for r in m.data["attachments"]
+                                 if isinstance(r, dict)]}
+                if isinstance((m.data or {}).get("attachments"), list)
+                and m.data["attachments"] else {})} for m in rows]
 
 
 async def _channel_block(client: AgoraClient, channel: str) -> dict[str, Any]:

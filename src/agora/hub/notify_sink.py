@@ -49,6 +49,10 @@ def notify_line(envelope: Envelope) -> str:
         "kind": envelope.kind.value,
         "status": envelope.status.value, "title": envelope.title,
         "flags": flags, **({"preview": preview} if preview else {}),
+        # Hub-computed count (same trust class as seq/flags): a body-less
+        # attachment message otherwise leaves no trace on this line at all.
+        **({"attachments": len(envelope.attachments)}
+           if envelope.attachments else {}),
     })
 
 

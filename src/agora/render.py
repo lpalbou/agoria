@@ -51,6 +51,29 @@ def _neutralize(text: str) -> str:
     return text.replace("\u27e6", "(").replace("\u27e7", ")").replace(_TOKEN, "A-G-O-R-A")
 
 
+def _attachments_field(refs: Any, channel: str) -> str:
+    """One header line naming a message's attachments + the fetch verb.
+
+    Adversarial-eval P0 (2026-07-16): the hub delivered refs on every
+    envelope but NEITHER renderer showed them, so no agent ever learned a
+    file existed — the whole feature was invisible to recipients. Filenames
+    and content types are member-influenced text, but this lands in the
+    fence header, which _fence neutralizes like every other field."""
+    if not isinstance(refs, list) or not refs:
+        return ""
+    parts = []
+    for r in refs:
+        if not isinstance(r, dict) or not r.get("id"):
+            continue
+        parts.append(f"{r.get('filename', 'attachment')} "
+                     f"({r.get('content_type', '?')}, {r.get('size', '?')}B) "
+                     f"id={r['id']}")
+    if not parts:
+        return ""
+    return ("; ".join(parts)
+            + f" — fetch: read_attachment(channel={channel!r}, id, download_path)")
+
+
 def _fence(nonce: str, label: str, fields: dict[str, str], content: str) -> str:
     header = "\n".join(f"{k}: {_neutralize(str(v))}" for k, v in fields.items() if v != "")
     body = _neutralize(content)
@@ -102,6 +125,8 @@ def render_messages(messages: list[dict[str, Any]]) -> str:
             "asks": _asks_field(m.data),
             "answers": ", ".join(str(a) for a in (m.data or {}).get("answers", [])
                                  ) if isinstance((m.data or {}).get("answers"), list) else "",
+            "attachments": _attachments_field((m.data or {}).get("attachments"),
+                                              m.channel),
         }
         blocks.append(_fence(nonce, f"msg id={m.id}", fields, m.body))
     return _preamble(nonce) + "\n\n" + "\n\n".join(blocks)
@@ -139,6 +164,7 @@ def render_envelopes(rows: list[dict[str, Any]]) -> str:
                        "answering" if e.has_resolved_reply else ""),
             **({"redelivery": "seen before — pinned because the obligation "
                               "is still open"} if e.redelivery else {}),
+            "attachments": _attachments_field(e.attachments, e.channel),
             "size_bytes": e.body_bytes, "title": e.title,
         }
         if e.redelivery:

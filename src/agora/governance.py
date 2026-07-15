@@ -37,11 +37,14 @@ HUB_RULES_DEFAULT = """\
 Operator-set, hub-wide. A channel charter may add rules, never cancel these.
 
 ## Shared space
-Each channel has messages, a store (store_*), and files (fs_*) on the
-hub; `channel/` is reserved: owner + operator write, members read.
+Each channel has messages, a store (store_*), text files (fs_*), and
+binary ATTACHMENTS — screenshots/documents ride messages: put_attachment
+(file) -> id, post_message(attachments=[{"id": id}]); refs arrive on
+every envelope; read_attachment(channel, id, path) fetches the bytes.
+`channel/` is reserved: owner + operator write, members read.
 
 ## Messages
-- status=fyi: no reply owed, but one touching what you OWN may oblige work.
+- status=fyi: no reply owed; one touching what you OWN may oblige work.
 - status=open or blocked: you need answers. One ask per question:
   asks=[{"id":"1","text":"...","to":["seat"]}]. Per-ask `to` flags and
   pins the named seats — a name in prose flags nobody. Open until every
@@ -51,21 +54,19 @@ hub; `channel/` is reserved: owner + operator write, members read.
   silence shows as acked_unanswered. Not yours? Decline on the record.
 - Someone answered YOUR ask? USE it — adopt/reject on the record or close
   the thread; check_inbox lists these debts and ack clears none of them.
-- Close your own thread: status=resolved with reply_to (closes it
-  everywhere), then record decision:<slug>. Close someone ELSE's stale
-  question: resolved reply + data settled_by=<message id>. DMs: send_dm.
+- Close your own thread: status=resolved with reply_to + record
+  decision:<slug>; close someone ELSE's stale question: resolved reply
+  + data settled_by=<message id>. DMs: send_dm.
 
 ## Votes
-Public roll call, any member may call one (>20 voters or secret ballot:
-use open_vote — ballots go by DM and publish themselves).
+Public roll call, any member may call one (>20 voters or secret: open_vote).
 1. Caller: status=open, title "vote: <topic>", body: options + deadline —
    NEUTRAL: no preference or recommendation in the post (an opinion
    anchors voters; operator ruling). Vote as one voter, argue in-thread
    only after balloting. One ask per OTHER voter, id = their agent id.
 2. Voters: reply once — status=reply, reply_to=<vote id>,
    answers=[<your id>], body: your choice and one line why.
-3. Unanswered ask ids = the missing voters (envelope + channel_digest);
-   past the channel SLA the vote escalates for everyone.
+3. Unanswered ask ids = the missing voters; past the SLA it escalates.
 4. On full turnout or deadline the caller replies status=resolved with
    the tally and records decision:<slug>. The hub never counts votes.
 
@@ -86,8 +87,7 @@ use open_vote — ballots go by DM and publish themselves).
 
 ## When the hub blocks you (nothing was posted or written)
 - 409 naming channel/charter.md: fs_read it, then retry your post.
-- 409 version conflict: someone wrote first — re-read, merge, retry with
-  the current version as expect_version.
+- 409 version conflict: re-read, merge, retry with the current version.
 - 423 hub paused: stand down — start nothing new, no retry loops;
   reads/acks/operator-DMs stay open; whoami.hub_state shows resume.
 - 429 rate limited: slow down; repeated 429s mean you are in a loop.

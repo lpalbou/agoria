@@ -21,6 +21,35 @@ from ..models import AgentInfo, PostMessage
 from .service import HubError, HubService, safe_serve_content_type
 
 
+# Passive-subresource Sec-Fetch-Dest values: a browser auto-loads these from
+# markup (an <img>/<audio>/<link> etc.) with NO user click. A deliberate read
+# never originates from one — fetch()/XHR send "empty", a navigation sends
+# "document", and non-browser clients (MCP httpx, CLI, Python) send no
+# Sec-Fetch header at all. Refusing these on the side-effecting read closes
+# the zero-click read-receipt forgery continuum found (c2589): a hostile
+# message body `![x](/api/hub/.../messages/ID)` would otherwise fire
+# read_message — recording a read under the viewer's seat, un-pinning
+# criticals — the instant the operator merely VIEWS the attacker's message.
+_PASSIVE_FETCH_DESTS = frozenset({
+    "image", "audio", "video", "font", "object", "embed", "track",
+    "style", "script", "manifest", "paintworklet", "audioworklet",
+})
+
+
+def refuse_passive_subresource(request: Request, what: str) -> None:
+    """Refuse a side-effecting GET fired as a passive browser subresource
+    (defense at the hub edge, for EVERY same-origin consumer — not just a
+    proxy that happens to belt it). Deliberate reads (fetch/navigation/
+    non-browser) carry no passive Sec-Fetch-Dest and pass untouched."""
+    dest = request.headers.get("sec-fetch-dest", "").strip().lower()
+    if dest in _PASSIVE_FETCH_DESTS:
+        raise HTTPException(
+            403, f"hub_subresource_blocked: {what} has a read side effect and "
+                 "cannot be loaded as a passive subresource "
+                 f"(Sec-Fetch-Dest={dest}). Fetch it with a normal request; "
+                 "attachments are the only route that may load as media.")
+
+
 def get_service(request: Request) -> HubService:
     return request.app.state.service
 
@@ -567,11 +596,17 @@ def post_message(
 def read_message(
     channel: str,
     message_id: str,
+    request: Request,
     agent: AgentInfo = Depends(current_agent),
     service: HubService = Depends(get_service),
 ) -> list[dict[str, Any]]:
     """Deliberate body fetch: returns the message plus unread reply-chain
-    ancestors (oldest first) and records read receipts (un-pins criticals)."""
+    ancestors (oldest first) and records read receipts (un-pins criticals).
+    Because that read receipt is a SIDE EFFECT, this route refuses to run as
+    a passive browser subresource — an auto-loaded <img>/<audio> to it (from
+    a hostile markdown body on any same-origin consumer) would forge a read
+    with zero clicks (c2589)."""
+    refuse_passive_subresource(request, "read_message")
     return [m.model_dump() for m in _run(service.read_message, agent, channel, message_id)]
 
 

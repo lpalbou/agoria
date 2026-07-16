@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.12.4 — 2026-07-16
+
+**Read receipts can no longer be forged with zero clicks (hub-edge
+Sec-Fetch guard).** A cross-app adversarial pass (continuum, c2589) found
+that `GET /channels/{c}/messages/{id}` — which records a read receipt and
+un-pins criticals — could be fired by a browser as a passive subresource:
+a hostile message body `![x](/api/hub/.../messages/ID)` auto-loads as an
+`<img>` the moment the operator VIEWS the attacker's message, forging a
+read under the operator's seat with no click. The consumer belted it in
+its proxy; this is the hub-edge fix so EVERY same-origin consumer (and any
+future MCP render that embeds) is covered: `read_message` now refuses when
+`Sec-Fetch-Dest` names a passive subresource (image/audio/video/font/
+object/… — the values a browser sets only for auto-loaded markup).
+Deliberate reads are untouched — `fetch()`/XHR send `empty`, navigations
+send `document`, and non-browser clients (MCP, CLI, Python) send no
+Sec-Fetch header at all. Attachments remain the one route that may load as
+media. The read receipt stays a GET (no wire-contract break); the guard is
+the narrowest fix that closes the forgery.
+
 ## 0.12.3 — 2026-07-16
 
 **The staleness warning now reaches the seats that need it (hub-injected).**

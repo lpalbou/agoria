@@ -282,3 +282,43 @@ def test_retired_peer_cannot_be_dm_opened():
     register(client, "bob")
     client.post("/agents/bob/retire", headers=op)
     assert client.post("/dms/bob", headers=alice).status_code == 404
+
+
+# -- zero-click read-receipt forgery (continuum c2589) ---------------------------
+
+
+def test_read_message_refuses_passive_subresource_loads():
+    """A side-effecting GET (read_message records a read receipt, un-pins
+    criticals) must refuse to run as a passive browser subresource: a
+    hostile markdown body `![x](/api/hub/.../messages/ID)` would otherwise
+    forge a read under the viewer's seat the instant they VIEW the attacker's
+    message (c2589). Deliberate reads (fetch/navigation/non-browser clients)
+    carry no passive Sec-Fetch-Dest and still work."""
+    client = make_client()
+    owner = register(client, "owner")
+    bob = register(client, "bob")
+    make_channel(client, owner, "room", bob, private=False)
+    msg = client.post("/channels/room/messages",
+                      json={"body": "secret", "status": "open", "to": ["bob"]},
+                      headers=owner).json()
+    path = f"/channels/room/messages/{msg['id']}"
+
+    # An <img>/<audio>-fired GET is refused, and records NO read.
+    for dest in ("image", "audio", "video", "font", "object"):
+        r = client.get(path, headers={**bob, "Sec-Fetch-Dest": dest})
+        assert r.status_code == 403 and "subresource_blocked" in r.json()["detail"]
+    # The obligation is still unread/sticky for bob (no forged receipt).
+    owed = client.get("/owed", headers={**bob, "X-Agora-Client": "9.9.9"}).json()
+    assert any(a.get("message_id") == msg["id"] or a.get("id") == msg["id"]
+               for a in owed.get("to_answer", [])) or \
+        any(e["id"] == msg["id"] for e in client.get(
+            "/inbox", headers={**bob, "X-Agora-Client": "9.9.9"}).json())
+
+    # A deliberate read (fetch: Sec-Fetch-Dest=empty) works and records it.
+    ok = client.get(path, headers={**bob, "Sec-Fetch-Dest": "empty"})
+    assert ok.status_code == 200
+    # A non-browser client (no Sec-Fetch header at all) also works.
+    msg2 = client.post("/channels/room/messages", json={"body": "two"},
+                       headers=owner).json()
+    assert client.get(f"/channels/room/messages/{msg2['id']}",
+                      headers=bob).status_code == 200

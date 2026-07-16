@@ -371,6 +371,25 @@ def test_dm_surfaces_carry_attachments(http):
     assert ref["filename"] == "spec.pdf"
 
 
+# -- stale MCP-server visibility (incident c2563) ----------------------------------
+
+
+def test_stale_banner_fires_only_when_hub_is_newer():
+    """A long-running MCP server keeps the code it booted with; when the hub
+    is upgraded underneath it, renders silently drop newer fields (the
+    attachments-invisible incident). The banner must fire exactly when the
+    hub is NEWER — never on equal, older, or unknown hub versions."""
+    from agora.mcp.server import stale_banner_text
+
+    assert stale_banner_text("0.12.1", "0.11.1").startswith("NOTE from your own tooling")
+    assert "attachments" in stale_banner_text("0.12.1", "0.11.1")
+    assert stale_banner_text("0.12.1", "0.12.1") == ""
+    assert stale_banner_text("0.11.0", "0.12.1") == ""          # hub older
+    assert stale_banner_text("", "0.12.1") == ""                # hub unknown
+    assert stale_banner_text("0.12.0.dev0", "0.12.1") == ""     # dev < release
+    assert stale_banner_text("1.0.0", "0.12.1") != ""
+
+
 # -- serve-type hardening unit matrix ---------------------------------------------
 
 

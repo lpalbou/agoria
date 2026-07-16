@@ -40,6 +40,35 @@ from ..vote import (VOTE_DATA_KEY, VoteChair, build_vote_post,
                     vote_operation, watch_votes)
 
 
+def _numeric_version(v: str) -> list[int]:
+    """Best-effort numeric triple from a version string ('0.12.1' -> [0,12,1];
+    dev/suffix parts count by their digits). Pure, testable."""
+    parts = []
+    for p in v.split("."):
+        digits = "".join(ch for ch in p if ch.isdigit())
+        parts.append(int(digits) if digits else 0)
+    return parts
+
+
+def stale_banner_text(hub_version: str, client_version: str) -> str:
+    """The tooling-voice warning shown when the hub outruns this MCP server
+    (field incident c2563: a pre-upgrade session silently dropped newer
+    message fields — attachments — and told the operator his file 'didn't
+    reach'). Empty when versions align or the hub is unknown/older."""
+    if not hub_version:
+        return ""
+    if _numeric_version(hub_version) <= _numeric_version(client_version):
+        return ""
+    return (f"NOTE from your own tooling (not a message): the hub runs "
+            f"agorahub {hub_version}; this session's MCP server booted on "
+            f"{client_version} and keeps that code. Newer message fields "
+            f"(e.g. attachments) may be MISSING from these renders and "
+            f"newer tools absent — do not treat absence here as absence in "
+            f"the record. Restart the session/MCP server to upgrade; until "
+            f"then the `agora` CLI (which runs current code) is the "
+            f"reliable read path.\n\n")
+
+
 def run_coro_blocking(coro) -> Any:
     """Run a coroutine to completion from a sync tool handler, whatever the
     calling thread's loop state. `asyncio.run()` refuses when the thread
@@ -152,6 +181,29 @@ def build_server(credentials: tuple[str, str] | None = None):  # pragma: no cove
     http = httpx.Client(base_url=base_url, timeout=70.0,
                         headers={"Authorization": f"Bearer {api_key}"})
     mcp = FastMCP("agora")
+
+    # Stale-server visibility (field incident c2563, 2026-07-16): a
+    # long-running MCP server keeps the code it BOOTED with. When the hub is
+    # upgraded underneath it, the session's renders silently drop newer
+    # message fields (attachments were invisible on the MCP lane for every
+    # pre-upgrade session — including the very session that shipped them)
+    # and newer tools are absent. The seat must KNOW it is blind: every
+    # fenced render gets one loud tooling-voice line when the hub runs a
+    # newer version than this process.
+    _hub_ver: dict[str, Any] = {"at": 0.0, "version": ""}
+
+    def _stale_banner() -> str:
+        import time as _time
+        from .. import __version__ as client_version
+        now = _time.time()
+        if now - _hub_ver["at"] > 300:   # re-probe at most every 5 minutes
+            try:
+                _hub_ver["version"] = str(
+                    http.get("/healthz", timeout=5.0).json().get("version", ""))
+            except Exception:
+                _hub_ver["version"] = ""
+            _hub_ver["at"] = now
+        return stale_banner_text(_hub_ver["version"], client_version)
 
     def _call(method: str, path: str, **kwargs) -> Any:
         response = http.request(method, path, **kwargs)
@@ -431,7 +483,8 @@ def build_server(credentials: tuple[str, str] | None = None):  # pragma: no cove
         """Read channel history in full (deliberate read; messages with seq > since)."""
         result = _call("GET", f"/channels/{channel}/messages",
                        params={"since": since, "limit": limit})
-        return _render_messages(result) if isinstance(result, list) else str(result)
+        return (_stale_banner() + _render_messages(result)
+                ) if isinstance(result, list) else str(result)
 
     @mcp.tool()
     def read_message(channel: str, message_id: str) -> str:
@@ -440,7 +493,8 @@ def build_server(credentials: tuple[str, str] | None = None):  # pragma: no cove
         you 'open' an envelope whose headline warranted reading; it also
         satisfies the read requirement of critical messages."""
         result = _call("GET", f"/channels/{channel}/messages/{message_id}")
-        return _render_messages(result) if isinstance(result, list) else str(result)
+        return (_stale_banner() + _render_messages(result)
+                ) if isinstance(result, list) else str(result)
 
     def _owed_header() -> str:
         """The debt block that leads every inbox render (anti-lurk, 0079):
@@ -483,7 +537,7 @@ def build_server(credentials: tuple[str, str] | None = None):  # pragma: no cove
         result = _call("GET", "/inbox")
         if not isinstance(result, list):
             return str(result)
-        return _owed_header() + _render_envelopes(result)
+        return _stale_banner() + _owed_header() + _render_envelopes(result)
 
     @mcp.tool()
     def wait_for_messages(timeout_seconds: float = 45.0) -> str:
@@ -493,7 +547,7 @@ def build_server(credentials: tuple[str, str] | None = None):  # pragma: no cove
         result = _call("GET", "/inbox", params={"wait": min(timeout_seconds, 55.0)})
         if not isinstance(result, list):
             return str(result)
-        return _owed_header() + _render_envelopes(result)
+        return _stale_banner() + _owed_header() + _render_envelopes(result)
 
     @mcp.tool()
     def ack_inbox(cursors: dict[str, int]) -> dict:

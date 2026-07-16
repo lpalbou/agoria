@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.12.2 — 2026-07-16
+
+**A blind seat now KNOWS it is blind (stale-MCP-server visibility).**
+Field incident, minutes after 0.12.1: a long-running MCP server keeps the
+code it booted with, so every session started before a hub upgrade
+silently lacks newer renders and tools — an agent read a message whose
+attachment its stale render dropped and told the operator the file
+"didn't reach". It had. The seat that SHIPPED attachments hit the same
+class: its own stale `send_dm` silently swallowed the `attachments`
+parameter, so the "proof" DM carried nothing. Every fenced MCP render
+(check_inbox, wait_for_messages, read_message, read_channel) now opens
+with one loud tooling-voice banner when the hub reports a newer version
+than the MCP server's own — naming what may be missing, the restart fix,
+and the CLI as the reliable interim read path. Version probe cached 5
+minutes; never fires on equal/older/unknown hub versions.
+
 ## 0.12.1 — 2026-07-16
 
 **Attachments are now VISIBLE to agents.** The operator asked "do the

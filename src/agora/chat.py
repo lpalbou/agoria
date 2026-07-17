@@ -94,6 +94,39 @@ def parse_line(line: str) -> tuple[str, str]:
     return "say", stripped
 
 
+_MENTION_RE = re.compile(r"@([A-Za-z0-9][A-Za-z0-9_.-]*)")
+
+
+def parse_group(arg: str) -> tuple[str, list[str]]:
+    """Parse a `/group` line into (title, members) — operator dm 24: free
+    text with @mentions anywhere. The @mentions become the roster (order
+    kept, duplicates dropped, case folded to the hub's lowercase ids); the
+    text with mentions stripped becomes the topic title. Both halves may
+    interleave: `/group Fix voice @gateway @core then verify with @entity`
+    -> ("Fix voice then verify with", [gateway, core, entity])."""
+    members: list[str] = []
+    for m in _MENTION_RE.findall(arg):
+        m = m.lower()
+        if m not in members:
+            members.append(m)
+    title = " ".join(_MENTION_RE.sub(" ", arg).split()).strip(" ,;:-")
+    return title, members
+
+
+def group_slug(title: str, taken: set[str]) -> str:
+    """A channel slug derived from the topic title: lowercase, dashes for
+    runs of non-slug characters, capped, uniqued against existing rooms
+    with -2/-3... (create_channel refuses spaces/slashes/controls, so the
+    slug must be born clean)."""
+    base = re.sub(r"[^a-z0-9_.-]+", "-", title.lower()).strip("-.") or "group"
+    base = base[:40].rstrip("-.")
+    slug, n = base, 1
+    while slug in taken:
+        n += 1
+        slug = f"{base}-{n}"
+    return slug
+
+
 def flags_of(env: Envelope) -> str:
     return ",".join(f for f, on in [
         ("CRITICAL", env.critical), ("escalated", env.escalated),
@@ -122,6 +155,10 @@ plain text          post to the current channel (status=fyi, no obligation)
                     dm and /ask). /dm PEER opens the conversation;
                     /dm PEER:N reads message N (same as /read PEER:N)
 /dms                your direct conversations (unread, recency)
+/group TEXT @a @b   spin up a FOCUSED private room from one line: the text
+                    becomes the room's name+purpose+opening ask, the
+                    @mentioned seats get invites — keeps deep work out of
+                    the big rooms (mentions can sit anywhere in the text)
 /owed               your debts: asks awaiting YOUR answer, answers to your
                     asks awaiting consumption, and who you are waiting on
 /board              follow the work: pending on you / queue / proposals /
@@ -1002,6 +1039,59 @@ class ChatApp:
         except Exception as exc:
             self._print(self.style.red(f"dm failed: {exc}"))
 
+    async def cmd_group(self, arg: str) -> None:
+        """`/group Any topic text @seat1 more text @seat2 ...` — one gesture
+        that spins up a FOCUSED room (operator dm 24): creates a private
+        channel named after the topic, sets its purpose, invites exactly
+        the @mentioned seats (invite token DM'd, joining stays their own
+        auditable act), posts the topic as the room's first open message so
+        arrivals see WHY the room exists, and switches you into it. Keeps
+        the discussion constrained to the agents concerned — the hub-rules
+        'deep work gets its OWN channel' norm, reduced to one line."""
+        title, members = parse_group(arg)
+        if not members:
+            self._print("usage: /group TOPIC TEXT with @seat mentions — e.g. "
+                        "/group fix the voice outage @gateway @core")
+            return
+        if not title:
+            title = "focused work with " + ", ".join(members)
+        s = self.style
+        taken = {c["name"] for c in await self.client.list_channels()}
+        name = group_slug(title, taken)
+        try:
+            await self.client.create_channel(name, private=True)
+        except Exception as exc:
+            self._print(s.red(f"cannot create '{name}': {exc}"))
+            return
+        with contextlib.suppress(Exception):
+            await self.client.store_set(name, "channel:meta",
+                                        {"purpose": title})
+        invited: list[str] = []
+        for peer in members:
+            try:
+                token = await self.client.create_invite(name, agent_id=peer)
+                await self.client.dm(
+                    peer,
+                    f"You are invited to '{name}' — focused room: {title}. "
+                    f"Join with join_channel(channel={name!r}, "
+                    f"invite_token={token!r}), read the opening post, and "
+                    "work the topic THERE (not in commons).",
+                    title=f"invite to {name}: {title}")
+                invited.append(peer)
+            except Exception as exc:
+                self._print(s.red(f"  {peer}: invite failed — {exc}"))
+        # The opening post is the room's charter-in-miniature: topic as an
+        # OPEN obligation with per-seat asks, so every invitee's listener
+        # wakes and their debts surface until they engage.
+        with contextlib.suppress(Exception):
+            await self.client.post(
+                name, title, title=derive_title(title), status=Status.open,
+                asks=[{"id": str(i + 1), "text": f"join and take up: {title}",
+                       "to": [p]} for i, p in enumerate(invited)])
+        self._print(f"group room {s.bold(name)} created — private, "
+                    f"{len(invited)} invited: {', '.join(invited) or '-'}")
+        await self.cmd_switch(name)
+
     async def cmd_owed(self) -> None:
         """YOUR debts and dues, straight from GET /owed: what awaits your
         answer, what answers to your own asks await consumption, and per
@@ -1151,6 +1241,7 @@ class ChatApp:
             "channels": self.cmd_channels, "ls": self.cmd_channels,
             "dm": lambda: self.cmd_dm(arg),
             "dms": self.cmd_dms,
+            "group": lambda: self.cmd_group(arg),
             "fs": lambda: self.cmd_fs(arg), "files": lambda: self.cmd_fs(arg),
             "switch": lambda: self.cmd_switch(arg), "c": lambda: self.cmd_switch(arg),
             "join": lambda: self.cmd_switch(arg),

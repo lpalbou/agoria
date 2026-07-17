@@ -706,3 +706,42 @@ def test_list_channels_carries_stats():
     head = client.get("/channels/design/messages", headers=bob).json()[-1]["seq"]
     assert design["last_seq"] == head
     assert design["last_at"] is not None and design["last_at"] > 0
+
+
+# -- /group: one-line focused-room creation (operator dm 24) --------------------
+
+def test_parse_group_mentions_anywhere_and_title_stripped():
+    from agora.chat import parse_group
+    title, members = parse_group(
+        "Fix the voice outage @gateway some context @core and verify @entity")
+    assert members == ["gateway", "core", "entity"]
+    assert title == "Fix the voice outage some context and verify"
+
+
+def test_parse_group_dedupes_and_folds_case():
+    from agora.chat import parse_group
+    title, members = parse_group("@Gateway topic @gateway @CORE")
+    assert members == ["gateway", "core"]
+    assert title == "topic"
+
+
+def test_parse_group_no_mentions_means_no_members():
+    from agora.chat import parse_group
+    title, members = parse_group("just some text")
+    assert members == [] and title == "just some text"
+
+
+def test_group_slug_clean_capped_unique():
+    from agora.chat import group_slug
+    assert group_slug("Fix the Voice Outage!", set()) == "fix-the-voice-outage"
+    assert group_slug("Fix", {"fix"}) == "fix-2"
+    assert group_slug("Fix", {"fix", "fix-2"}) == "fix-3"
+    long = group_slug("x" * 80, set())
+    assert len(long) <= 40
+    # Born valid for create_channel: no spaces/slashes/control chars.
+    assert " " not in long and "/" not in long
+
+
+def test_group_slug_degenerate_title_falls_back():
+    from agora.chat import group_slug
+    assert group_slug("!!!", set()) == "group"

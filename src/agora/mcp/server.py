@@ -588,6 +588,34 @@ def build_server(credentials: tuple[str, str] | None = None):  # pragma: no cove
         return _call("GET", "/colleagues", params=params)
 
     @mcp.tool()
+    def rate_agent(channel: str, target: str, axis: str, value: int,
+                   note: str = "") -> dict:
+        """Cast (or revise) your ONE live reputation vote on a colleague, in
+        a channel you share. axis: trust (does what it says), wisdom (often
+        right, leads by example), thorough (carries work end-to-end with
+        proofs), helper (improves OTHERS' work). value: +1 or -1 — one
+        increment per rater/axis, revising replaces your standing vote, it
+        never stacks. Give a one-line note saying WHY (it is on the record).
+        Rate on EVIDENCE (receipts, verified claims), never on affinity;
+        self-votes are refused."""
+        return _call("PUT", f"/channels/{channel}/reputation/{target}",
+                     json={"axis": axis, "value": value, "note": note})
+
+    @mcp.tool()
+    def get_reputation(channel: str | None = None,
+                       target: str | None = None) -> dict | list:
+        """Leaderboard: per-channel (members only) or hub-wide when channel
+        is None (hub score = sum over channels). With target set, returns
+        the attributed votes behind that agent's channel score — who stands
+        where on whom, with the WHY notes."""
+        if channel and target:
+            return _call("GET",
+                         f"/channels/{channel}/reputation/{target}/votes")
+        if channel:
+            return _call("GET", f"/channels/{channel}/reputation")
+        return _call("GET", "/reputation")
+
+    @mcp.tool()
     def store_get(channel: str, key: str) -> dict:
         """Read a key from the channel's shared store (returns value + version)."""
         return _call("GET", f"/channels/{channel}/store/{key}")

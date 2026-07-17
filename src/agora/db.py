@@ -218,6 +218,24 @@ CREATE TABLE IF NOT EXISTS blocks (
 -- table never prunes, so index the lookup key to keep it O(log n) rather
 -- than a growing reverse table scan (review F6).
 CREATE INDEX IF NOT EXISTS idx_blocks_scope_agent ON blocks (scope, agent_id);
+-- Reputation (0094): peer-assigned ±1 on four fixed axes, per channel.
+-- ONE live vote per (channel, target, rater, axis) — revising overwrites the
+-- row (updated_at moves), so the table IS the audit trail: who stands where
+-- on whom, right now, with full attribution. Identity-bound (rater is the
+-- authenticated agent), self-votes refused in the service, membership
+-- required for both parties. Hub-level reputation = sum over channels.
+CREATE TABLE IF NOT EXISTS reputation_votes (
+    channel     TEXT NOT NULL,
+    target      TEXT NOT NULL,
+    rater       TEXT NOT NULL,
+    axis        TEXT NOT NULL,          -- trust|wisdom|thorough|helper
+    value       INTEGER NOT NULL,       -- +1 | -1
+    note        TEXT NOT NULL DEFAULT '',
+    created_at  REAL NOT NULL,
+    updated_at  REAL NOT NULL,
+    PRIMARY KEY (channel, target, rater, axis)
+);
+CREATE INDEX IF NOT EXISTS idx_reputation_target ON reputation_votes (target);
 """
 
 
@@ -1136,6 +1154,125 @@ class Database:
         meta = {k: row[k] for k in ("channel", "id", "filename", "content_type",
                                     "size", "created_by", "created_at")}
         return meta, row["bytes"]
+
+    # -- reputation (0094): peer ±1 votes on fixed axes, one live per rater ------
+
+    def reputation_cast(self, channel: str, target: str, rater: str,
+                        axis: str, value: int, note: str) -> dict[str, Any]:
+        """Upsert the rater's ONE live vote on (target, axis) in a channel.
+        Revision overwrites in place (updated_at moves, created_at stays):
+        a change of judgment replaces the old one on the record rather than
+        stacking — the anti-ballot-stuffing property, enforced by the
+        primary key rather than by policy prose."""
+        now = time.time()
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO reputation_votes"
+                " (channel, target, rater, axis, value, note,"
+                "  created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)"
+                " ON CONFLICT(channel, target, rater, axis) DO UPDATE SET"
+                " value = excluded.value, note = excluded.note,"
+                " updated_at = excluded.updated_at",
+                (channel, target, rater, axis, value, note, now, now),
+            )
+            self._conn.commit()
+            row = self._conn.execute(
+                "SELECT * FROM reputation_votes WHERE channel = ? AND"
+                " target = ? AND rater = ? AND axis = ?",
+                (channel, target, rater, axis),
+            ).fetchone()
+        return dict(row)
+
+    def reputation_clear(self, channel: str, target: str, rater: str,
+                         axis: str | None = None) -> int:
+        """Withdraw the rater's live vote(s) on a target (one axis, or all
+        four when axis is None). Returns rows removed."""
+        with self._lock:
+            if axis is None:
+                cur = self._conn.execute(
+                    "DELETE FROM reputation_votes WHERE channel = ? AND"
+                    " target = ? AND rater = ?", (channel, target, rater))
+            else:
+                cur = self._conn.execute(
+                    "DELETE FROM reputation_votes WHERE channel = ? AND"
+                    " target = ? AND rater = ? AND axis = ?",
+                    (channel, target, rater, axis))
+            self._conn.commit()
+        return cur.rowcount
+
+    def reputation_channel(self, channel: str) -> list[dict[str, Any]]:
+        """Per-target axis sums and voter counts for one channel, total
+        descending. Shape: {target, total, axes: {axis: {score, up, down}},
+        raters: N}."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT target, axis, SUM(value) AS score,"
+                " SUM(CASE WHEN value > 0 THEN 1 ELSE 0 END) AS up,"
+                " SUM(CASE WHEN value < 0 THEN 1 ELSE 0 END) AS down"
+                " FROM reputation_votes WHERE channel = ?"
+                " GROUP BY target, axis", (channel,),
+            ).fetchall()
+            raters = self._conn.execute(
+                "SELECT target, COUNT(DISTINCT rater) AS raters"
+                " FROM reputation_votes WHERE channel = ?"
+                " GROUP BY target", (channel,),
+            ).fetchall()
+        by_target: dict[str, dict[str, Any]] = {}
+        for r in rows:
+            t = by_target.setdefault(
+                r["target"], {"target": r["target"], "total": 0, "axes": {},
+                              "raters": 0})
+            t["axes"][r["axis"]] = {"score": int(r["score"]),
+                                    "up": int(r["up"]), "down": int(r["down"])}
+            t["total"] += int(r["score"])
+        for r in raters:
+            if r["target"] in by_target:
+                by_target[r["target"]]["raters"] = int(r["raters"])
+        return sorted(by_target.values(),
+                      key=lambda t: (-t["total"], t["target"]))
+
+    def reputation_hub(self) -> list[dict[str, Any]]:
+        """Hub-level reputation: the SUM over channels (the operator's
+        definition), same shape as reputation_channel plus the number of
+        channels the target was rated in."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT target, axis, SUM(value) AS score,"
+                " SUM(CASE WHEN value > 0 THEN 1 ELSE 0 END) AS up,"
+                " SUM(CASE WHEN value < 0 THEN 1 ELSE 0 END) AS down"
+                " FROM reputation_votes GROUP BY target, axis",
+            ).fetchall()
+            spread = self._conn.execute(
+                "SELECT target, COUNT(DISTINCT channel) AS channels,"
+                " COUNT(DISTINCT rater) AS raters"
+                " FROM reputation_votes GROUP BY target",
+            ).fetchall()
+        by_target: dict[str, dict[str, Any]] = {}
+        for r in rows:
+            t = by_target.setdefault(
+                r["target"], {"target": r["target"], "total": 0, "axes": {},
+                              "raters": 0, "channels": 0})
+            t["axes"][r["axis"]] = {"score": int(r["score"]),
+                                    "up": int(r["up"]), "down": int(r["down"])}
+            t["total"] += int(r["score"])
+        for r in spread:
+            if r["target"] in by_target:
+                by_target[r["target"]]["channels"] = int(r["channels"])
+                by_target[r["target"]]["raters"] = int(r["raters"])
+        return sorted(by_target.values(),
+                      key=lambda t: (-t["total"], t["target"]))
+
+    def reputation_votes_for(self, channel: str,
+                             target: str) -> list[dict[str, Any]]:
+        """The live votes behind one target's channel score — full
+        attribution (rater, axis, value, note, timestamps), newest first.
+        This is the 'why did the score move' surface."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM reputation_votes WHERE channel = ? AND"
+                " target = ? ORDER BY updated_at DESC", (channel, target),
+            ).fetchall()
+        return [dict(r) for r in rows]
 
     # -- virtual filesystem storage (monotonic version, tombstone delete) --------
     #

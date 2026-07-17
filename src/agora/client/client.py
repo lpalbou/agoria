@@ -200,6 +200,19 @@ class AgoraClient:
         params = {"subject": subject} if subject else {}
         return self._json(await self._http.get("/colleagues", params=params))
 
+    async def rate(self, channel: str, target: str, axis: str, value: int,
+                   note: str = "") -> dict[str, Any]:
+        """Cast/revise your one live reputation vote (0094): axis in
+        trust|wisdom|thorough|helper, value +1/-1, note = one-line why."""
+        return self._json(await self._http.put(
+            f"/channels/{channel}/reputation/{target}",
+            json={"axis": axis, "value": value, "note": note}))
+
+    async def reputation(self, channel: str | None = None) -> dict[str, Any]:
+        """Leaderboard: one channel's (member view) or hub-wide (sum)."""
+        path = f"/channels/{channel}/reputation" if channel else "/reputation"
+        return self._json(await self._http.get(path))
+
     async def ack(self, cursors: dict[str, int]) -> None:
         """Advance read cursors for exactly what you HANDLED.
 

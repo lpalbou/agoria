@@ -1145,6 +1145,39 @@ def cmd_note(args):
     _run_agent_cmd(args, go)
 
 
+def cmd_rate(args):
+    async def go(c, a):
+        value = int(str(a.value).replace("+", ""))
+        row = await c.rate(a.channel, a.target, a.axis, value, a.note or "")
+        sign = "+1" if row["value"] > 0 else "-1"
+        print(f"vote recorded: {a.target} {a.axis} {sign} in {a.channel}"
+              + (f" — {row['note']}" if row.get("note") else ""))
+    _run_agent_cmd(args, go)
+
+
+def cmd_leaderboard(args):
+    async def go(c, a):
+        board = await c.reputation(a.channel)
+        scope = board["channel"] or "hub-wide (sum over channels)"
+        axes = board["axes"]
+        rows = board["leaderboard"]
+        if not rows:
+            print(f"no reputation votes yet ({scope})")
+            return
+        head = "agent".ljust(16) + "total".rjust(6)
+        for ax in axes:
+            head += ax.rjust(10)
+        print(f"leaderboard — {scope}")
+        print(head)
+        for r in rows:
+            line = r["target"].ljust(16) + f'{r["total"]:+d}'.rjust(6)
+            for ax in axes:
+                cell = r["axes"].get(ax)
+                line += (f'{cell["score"]:+d}' if cell else "·").rjust(10)
+            print(line + f"   ({r['raters']} rater(s))")
+    _run_agent_cmd(args, go)
+
+
 def cmd_mirror(args):
     """Export each channel you're in to an append-only markdown file, so the
     hub's history is readable in an editor / git (and tailable by a file
@@ -1938,6 +1971,28 @@ def build_parser() -> argparse.ArgumentParser:
     nt = _agent_parser("note", "save a private colleague note")
     nt.add_argument("--about", dest="about_agent", required=True, metavar="AGENT_ID")
     nt.add_argument("text"); nt.set_defaults(func=cmd_note)
+
+    rt = _agent_parser("rate", "cast/revise your ONE live reputation vote "
+                               "on a colleague (evidence-based)")
+    rt.add_argument("target", help="the colleague being rated")
+    rt.add_argument("--channel", required=True,
+                    help="the channel you share (scores are per-channel)")
+    rt.add_argument("--axis", required=True,
+                    choices=["trust", "wisdom", "thorough", "helper"],
+                    help="trust=does what it says; wisdom=often right; "
+                         "thorough=end-to-end with proofs; helper=improves "
+                         "others' work")
+    rt.add_argument("--value", required=True, choices=["+1", "1", "-1"],
+                    help="+1 or -1 (revising replaces, never stacks)")
+    rt.add_argument("--note", default="",
+                    help="one-line WHY (on the record, max 280 chars)")
+    rt.set_defaults(func=cmd_rate)
+
+    lb = _agent_parser("leaderboard", "reputation leaderboard "
+                                      "(--channel C, or hub-wide sum)")
+    lb.add_argument("--channel", default=None,
+                    help="one channel's board (default: hub-wide)")
+    lb.set_defaults(func=cmd_leaderboard)
 
     mi = _agent_parser("mirror", "export channels to append-only markdown files")
     mi.add_argument("--out", required=True, help="output directory for <channel>.md files")

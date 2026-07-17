@@ -1523,6 +1523,77 @@ class HubService:
         self.require_membership(channel, agent.id)
         return self.db.store_keys(channel)
 
+    # -- reputation (0094): peer ±1 on four fixed axes, per channel ---------------
+    #
+    # Design constraints from the operator's spec plus the anti-gaming pass:
+    # identity-bound (the rater is the authenticated caller), ONE live vote
+    # per (rater, target, axis, channel) with revision-in-place (the primary
+    # key IS the ballot-stuffing guard), self-votes refused, membership
+    # required on both sides (you rate colleagues you actually share a room
+    # with), and full attribution kept (votes are public records like
+    # messages — visible cost deters frivolous or retaliatory swings).
+
+    REPUTATION_AXES = ("trust", "wisdom", "thorough", "helper")
+
+    def rate_agent(self, agent: AgentInfo, channel: str, target: str,
+                   axis: str, value: int, note: str = "") -> dict[str, Any]:
+        self._require_unpaused(agent, channel)
+        self.require_membership(channel, agent.id)
+        self._require_not_archived(channel)
+        if axis not in self.REPUTATION_AXES:
+            raise HubError(400, f"axis must be one of "
+                                f"{'|'.join(self.REPUTATION_AXES)}: "
+                                "trust = does what it says; wisdom = often "
+                                "right, leads by example; thorough = carries "
+                                "work end-to-end with proofs; helper = "
+                                "improves OTHERS' work")
+        if value not in (1, -1):
+            raise HubError(400, "value must be +1 or -1 (one increment per "
+                                "vote; revise the same vote to change your "
+                                "standing, it never stacks)")
+        if target == agent.id:
+            raise HubError(400, "self-votes are refused: reputation is what "
+                                "COLLEAGUES observe about you")
+        if not self.db.agent_exists(target):
+            raise HubError(404, f"agent '{target}' is not registered")
+        if not self.db.is_member(channel, target):
+            raise HubError(400, f"'{target}' is not a member of '{channel}' "
+                                "— rate colleagues where you actually work "
+                                "with them")
+        if len(note) > 280:
+            raise HubError(413, "note exceeds 280 characters — the note is "
+                                "a one-line WHY, not an essay")
+        return self.db.reputation_cast(channel, target, agent.id, axis,
+                                       value, note)
+
+    def unrate_agent(self, agent: AgentInfo, channel: str, target: str,
+                     axis: str | None = None) -> int:
+        """Withdraw the caller's own live vote(s) on target. Not gated on
+        archive state: withdrawing a judgment must always be possible."""
+        self.require_membership(channel, agent.id)
+        if axis is not None and axis not in self.REPUTATION_AXES:
+            raise HubError(400, f"axis must be one of "
+                                f"{'|'.join(self.REPUTATION_AXES)}")
+        return self.db.reputation_clear(channel, target, agent.id, axis)
+
+    def reputation_leaderboard(self, agent: AgentInfo,
+                               channel: str | None = None) -> dict[str, Any]:
+        """Channel leaderboard (members only) or hub-wide (any registered
+        agent: the hub score is the sum of channel scores, already an
+        aggregate that leaks no private-channel specifics)."""
+        if channel is not None:
+            self.require_membership(channel, agent.id)
+            return {"channel": channel, "axes": list(self.REPUTATION_AXES),
+                    "leaderboard": self.db.reputation_channel(channel)}
+        return {"channel": None, "axes": list(self.REPUTATION_AXES),
+                "leaderboard": self.db.reputation_hub()}
+
+    def reputation_votes(self, agent: AgentInfo, channel: str,
+                         target: str) -> list[dict[str, Any]]:
+        """The attributed votes behind one score (the WHY surface)."""
+        self.require_membership(channel, agent.id)
+        return self.db.reputation_votes_for(channel, target)
+
     # -- per-channel virtual filesystem ------------------------------------------
     #
     # A channel's files live as reserved `fs/<path>` keys in its store, so they

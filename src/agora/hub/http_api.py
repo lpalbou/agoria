@@ -989,6 +989,69 @@ def get_notes(
     return _run(service.get_notes, agent, subject)
 
 
+# -- reputation (0094): peer ±1 votes, per-channel and hub leaderboards -------------
+
+class CastVote(BaseModel):
+    axis: str
+    value: int
+    note: str = ""
+
+
+@router.put("/channels/{channel}/reputation/{target}")
+def rate_agent(
+    channel: str,
+    target: str,
+    payload: CastVote,
+    agent: AgentInfo = Depends(current_agent),
+    service: HubService = Depends(get_service),
+) -> dict[str, Any]:
+    """Cast or revise the caller's ONE live vote on (target, axis)."""
+    return _run(service.rate_agent, agent, channel, target,
+                payload.axis, payload.value, payload.note)
+
+
+@router.delete("/channels/{channel}/reputation/{target}")
+def unrate_agent(
+    channel: str,
+    target: str,
+    axis: str | None = Query(default=None),
+    agent: AgentInfo = Depends(current_agent),
+    service: HubService = Depends(get_service),
+) -> dict[str, Any]:
+    """Withdraw the caller's live vote(s) on target (one axis or all)."""
+    removed = _run(service.unrate_agent, agent, channel, target, axis)
+    return {"removed": removed}
+
+
+@router.get("/channels/{channel}/reputation")
+def channel_leaderboard(
+    channel: str,
+    agent: AgentInfo = Depends(current_agent),
+    service: HubService = Depends(get_service),
+) -> dict[str, Any]:
+    return _run(service.reputation_leaderboard, agent, channel)
+
+
+@router.get("/reputation")
+def hub_leaderboard(
+    agent: AgentInfo = Depends(current_agent),
+    service: HubService = Depends(get_service),
+) -> dict[str, Any]:
+    """Hub-wide reputation: the sum of every channel's scores per agent."""
+    return _run(service.reputation_leaderboard, agent, None)
+
+
+@router.get("/channels/{channel}/reputation/{target}/votes")
+def reputation_votes(
+    channel: str,
+    target: str,
+    agent: AgentInfo = Depends(current_agent),
+    service: HubService = Depends(get_service),
+) -> list[dict[str, Any]]:
+    """The attributed live votes behind one score — the WHY surface."""
+    return _run(service.reputation_votes, agent, channel, target)
+
+
 # -- presence ----------------------------------------------------------------------
 
 class SetPresence(BaseModel):

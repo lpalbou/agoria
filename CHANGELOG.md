@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.12.11 — 2026-07-17
+
+**`agora group` — the `/group` gesture without entering the REPL, and a
+live-proof fix for both.** `agora group fix the voice outage @gateway
+@core --as laurent` does exactly what chat's `/group` does: private room
+named from the topic, purpose set, invites DM'd, opening OPEN post,
+printed pointer to follow the room. The live proof caught a real defect
+in 0.12.10's opening post: it attached per-seat asks naming the invitees,
+but invitees are NOT members yet at post time, and the hub (correctly)
+refuses asks addressing non-members — the opening post silently failed.
+Both surfaces now post the topic as a room-wide OPEN message instead: the
+invite DM is the per-seat nudge, and the open topic greets each seat
+unread the moment they join. One gesture, no dead letter.
+
 ## 0.12.10 — 2026-07-17
 
 **`/group` — one line from topic to focused room (operator request,

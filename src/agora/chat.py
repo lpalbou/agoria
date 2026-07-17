@@ -1080,14 +1080,16 @@ class ChatApp:
                 invited.append(peer)
             except Exception as exc:
                 self._print(s.red(f"  {peer}: invite failed — {exc}"))
-        # The opening post is the room's charter-in-miniature: topic as an
-        # OPEN obligation with per-seat asks, so every invitee's listener
-        # wakes and their debts surface until they engage.
-        with contextlib.suppress(Exception):
-            await self.client.post(
-                name, title, title=derive_title(title), status=Status.open,
-                asks=[{"id": str(i + 1), "text": f"join and take up: {title}",
-                       "to": [p]} for i, p in enumerate(invited)])
+        # The opening post is the room's charter-in-miniature: the topic as
+        # a room-wide OPEN obligation. Deliberately NO per-seat asks: the
+        # hub refuses asks naming non-members, and invitees have not joined
+        # yet (live-proof catch) — the invite DM is the per-seat nudge, and
+        # the open topic is unread for each seat the moment they join.
+        try:
+            await self.client.post(name, title, title=derive_title(title),
+                                   status=Status.open)
+        except Exception as exc:
+            self._print(s.red(f"  opening post failed: {exc}"))
         self._print(f"group room {s.bold(name)} created — private, "
                     f"{len(invited)} invited: {', '.join(invited) or '-'}")
         await self.cmd_switch(name)

@@ -868,6 +868,52 @@ def cmd_channels(args):
     _run_agent_cmd(args, go)
 
 
+def cmd_group(args):
+    """One-shot `/group` from the terminal (operator dm 26): the same
+    gesture the chat REPL ships, without entering the REPL. Free text with
+    @mentions anywhere -> private room named from the topic, purpose set,
+    invites DM'd, opening OPEN post with one ask per invitee (listeners
+    wake; the debt stands until each seat engages)."""
+    from .chat import derive_title, group_slug, parse_group
+    from .models import Status
+
+    text = " ".join(args.text)
+    title, members = parse_group(text)
+    if not members:
+        sys.exit("agora group: no @mentions found — usage: "
+                 "agora group fix the voice outage @gateway @core")
+    if not title:
+        title = "focused work with " + ", ".join(members)
+
+    async def go(c, a):
+        taken = {ch["name"] for ch in await c.list_channels()}
+        name = group_slug(title, taken)
+        await c.create_channel(name, private=True)
+        await c.store_set(name, "channel:meta", {"purpose": title})
+        invited = []
+        for peer in members:
+            try:
+                token = await c.create_invite(name, agent_id=peer)
+                await c.dm(peer,
+                           f"You are invited to '{name}' — focused room: "
+                           f"{title}. Join with join_channel(channel={name!r}, "
+                           f"invite_token={token!r}), read the opening post, "
+                           "and work the topic THERE (not in commons).",
+                           title=f"invite to {name}: {title}")
+                invited.append(peer)
+            except Exception as exc:
+                print(f"  {peer}: invite failed — {exc}")
+        # Room-wide OPEN topic, no per-seat asks: invitees are not members
+        # yet, and the hub refuses asks naming non-members. The invite DM
+        # nudges each seat; the open topic greets them unread on join.
+        await c.post(name, title, title=derive_title(title),
+                     status=Status.open)
+        print(f"group room '{name}' created — private, {len(invited)} "
+              f"invited: {', '.join(invited) or '-'}")
+        print(f"  follow it: agora chat --as {args.as_agent}   then /switch {name}")
+    _run_agent_cmd(args, go)
+
+
 def cmd_create_channel(args):
     """Create a channel from the terminal — the missing room-creation verb
     (until now a public room needed a python one-liner). Mirrors the MCP
@@ -1776,6 +1822,12 @@ def build_parser() -> argparse.ArgumentParser:
                     help="scope to everything about one peer (your DM + their "
                          "activity in your shared channels)")
     sm.set_defaults(func=cmd_summarize)
+
+    gp = _agent_parser("group", "one line -> focused private room: "
+                                "agora group TOPIC TEXT @seat1 @seat2")
+    gp.add_argument("text", nargs="+",
+                    help="topic text with @seat mentions anywhere in it")
+    gp.set_defaults(func=cmd_group)
 
     cc = _agent_parser("create-channel",
                        "create a channel (the --as agent becomes owner)")

@@ -1563,6 +1563,11 @@ class HubService:
         if len(note) > 280:
             raise HubError(413, "note exceeds 280 characters — the note is "
                                 "a one-line WHY, not an essay")
+        # Notes are read by terminal/CLI consumers, not only the React UI:
+        # sanitize like every other cross-agent text field (strips control
+        # chars/ANSI/newlines) so a note can't spoof a CLI leaderboard or
+        # injection-poison a log (adversary V6).
+        note = sanitize_text(note, 280)
         return self.db.reputation_cast(channel, target, agent.id, axis,
                                        value, note)
 

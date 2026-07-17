@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.12.8 — 2026-07-17
+
+**Reputation hardening (adversarial review of 0.12.7).** An independent
+adversarial pass tried to game the fresh reputation system and found one
+HIGH vector plus two smaller ones; all fixed, all with reproductions now
+in the suite:
+
+- **Channel farming (HIGH), closed.** The hub score was a raw SUM over
+  channels, so a colluding pair could pump a score without bound by
+  self-creating channels (measured +240 in 0.38s over 60 channels). The
+  hub score is now DISTINCT VOUCHERS: each rater collapses to at most ±1
+  per axis regardless of how many channels you share, and DM channels
+  (unilateral by construction) are excluded entirely. The hub number now
+  means "how many colleagues vouch," which is what consumers assume. The
+  per-channel board is unchanged (real members, real votes).
+- **Votes outlived retirement (MED), closed.** Retiring a seat now
+  withdraws its votes AS A RATER (a decommissioned identity keeps no
+  voting weight); votes ABOUT a still-active target are preserved.
+- **Note input + value type (LOW), closed.** Vote notes are sanitized
+  like every other cross-agent text field (a note can't spoof a CLI
+  board or poison a log — the React UI was already safe), and the vote
+  value is StrictInt so JSON `true`/`1.0`/`"1"` are rejected at the
+  boundary instead of coerced.
+
+The review confirmed the core contract holds under test: identity-bound,
+one live vote per rater/axis (revision never stacks), self-votes refused,
+full attribution behind the membership gate, and hub = the honest
+aggregate of channel judgment.
+
 ## 0.12.7 — 2026-07-17
 
 **Reputation (0094): peer-assigned ±1 on four axes, per-channel scores,

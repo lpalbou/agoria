@@ -13,7 +13,7 @@ from typing import Any
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, StrictInt
 from starlette.concurrency import run_in_threadpool
 
 from ..db import StoreConflict
@@ -993,7 +993,9 @@ def get_notes(
 
 class CastVote(BaseModel):
     axis: str
-    value: int
+    # StrictInt: reject JSON true/1.0/"1" at the boundary — a ±1 vote is an
+    # integer, and lax coercion muddies the audit trail (adversary V1).
+    value: StrictInt
     note: str = ""
 
 

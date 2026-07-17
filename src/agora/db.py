@@ -370,7 +370,13 @@ class Database:
         retirement record and removes ALL channel memberships (roster
         exclusion) — the id stays in `agents` forever so message attribution
         can never be hijacked by re-registration. Returns the channels the
-        agent was evicted from. Idempotent (reason refreshes)."""
+        agent was evicted from. Idempotent (reason refreshes).
+
+        Also withdraws the retiree's reputation votes AS A RATER (0094
+        hardening): a decommissioned seat must not keep voting weight it
+        can no longer stand behind — otherwise a farm's sock-puppets keep
+        pumping after retirement. Votes ABOUT the agent are kept: they are
+        colleagues' standing record, unaffected by the target's exit."""
         now = time.time()
         with self._lock:
             channels = [r["channel"] for r in self._conn.execute(
@@ -379,6 +385,8 @@ class Database:
                 "UPDATE agents SET retired_at = COALESCE(retired_at, ?), "
                 "retired_reason = ? WHERE id = ?", (now, reason, agent_id))
             self._conn.execute("DELETE FROM members WHERE agent_id = ?", (agent_id,))
+            self._conn.execute("DELETE FROM reputation_votes WHERE rater = ?",
+                               (agent_id,))
             self._conn.commit()
         return channels
 
@@ -1232,20 +1240,37 @@ class Database:
                       key=lambda t: (-t["total"], t["target"]))
 
     def reputation_hub(self) -> list[dict[str, Any]]:
-        """Hub-level reputation: the SUM over channels (the operator's
-        definition), same shape as reputation_channel plus the number of
-        channels the target was rated in."""
+        """Hub-level reputation as DISTINCT VOUCHERS, not channel-vote sums
+        (0094 hardening, adversarial review 2026-07-17). A naive SUM over
+        channels let a colluding pair farm self-created channels to pump a
+        score without bound (measured: +240 in 0.38s over 60 channels). The
+        honest hub number is 'how many colleagues vouch on this axis': each
+        rater collapses to ONE net sign per (target, axis) — the sign of
+        their summed votes across channels — so N channels can never
+        multiply one rater. DM channels are excluded entirely (a DM is
+        unilateral — the rater opens it alone — so it must not add weight).
+        `channels` reports the distinct NON-DM channels the target was rated
+        in; `raters` the distinct raters with a non-zero net stance."""
         with self._lock:
+            # Inner query: each rater's net sign per (target, axis) across
+            # non-DM channels. Outer: sum those signs (distinct vouchers)
+            # and count the +/- voucher raters.
             rows = self._conn.execute(
-                "SELECT target, axis, SUM(value) AS score,"
-                " SUM(CASE WHEN value > 0 THEN 1 ELSE 0 END) AS up,"
-                " SUM(CASE WHEN value < 0 THEN 1 ELSE 0 END) AS down"
-                " FROM reputation_votes GROUP BY target, axis",
+                "SELECT target, axis, SUM(sign) AS score,"
+                " SUM(CASE WHEN sign > 0 THEN 1 ELSE 0 END) AS up,"
+                " SUM(CASE WHEN sign < 0 THEN 1 ELSE 0 END) AS down FROM ("
+                "  SELECT target, axis, rater,"
+                "   CASE WHEN SUM(value) > 0 THEN 1"
+                "        WHEN SUM(value) < 0 THEN -1 ELSE 0 END AS sign"
+                "  FROM reputation_votes WHERE channel NOT LIKE 'dm:%'"
+                "  GROUP BY target, axis, rater"
+                " ) WHERE sign != 0 GROUP BY target, axis",
             ).fetchall()
             spread = self._conn.execute(
                 "SELECT target, COUNT(DISTINCT channel) AS channels,"
                 " COUNT(DISTINCT rater) AS raters"
-                " FROM reputation_votes GROUP BY target",
+                " FROM reputation_votes WHERE channel NOT LIKE 'dm:%'"
+                " GROUP BY target", (),
             ).fetchall()
         by_target: dict[str, dict[str, Any]] = {}
         for r in rows:

@@ -161,9 +161,11 @@ def test_hub_reputation_is_sum_over_channels():
     hub = client.get("/reputation", headers=k["outsider"]).json()
     assert hub["channel"] is None
     row = next(r for r in hub["leaderboard"] if r["target"] == "beta")
-    # workroom (+2) + lab (+1) = 3, across 2 channels.
-    assert row["total"] == 3 and row["channels"] == 2
-    assert row["axes"]["trust"]["up"] == 3
+    # DISTINCT VOUCHERS (0094 hardening), not the channel sum: alpha voted
+    # +trust in BOTH workroom and lab but counts ONCE (+1); gamma once (+1).
+    # Total = 2 vouchers across 2 channels, not 3 channel-votes.
+    assert row["total"] == 2 and row["channels"] == 2
+    assert row["axes"]["trust"]["up"] == 2
 
     # Channel boards stay membership-gated; the outsider reads only hub.
     r = client.get("/channels/workroom/reputation", headers=k["outsider"])
@@ -188,6 +190,89 @@ def test_votes_audit_surface_names_raters_and_whys():
 
 
 # -- lifecycle interactions -----------------------------------------------------
+
+
+def test_hub_score_counts_distinct_vouchers_not_channel_farms():
+    """0094 hardening (adversary V2): the hub total is DISTINCT VOUCHERS,
+    not a sum over channels — so a colluding pair cannot pump a score by
+    farming self-created channels. One rater across many shared channels
+    counts ONCE per axis; DM channels never add weight."""
+    client = make_client()
+    k = setup_room(client)
+    # alpha rates beta +trust in the shared room AND in five more shared
+    # channels — the naive sum would be +6; distinct-voucher is +1.
+    rate(client, k["alpha"], "beta", axis="trust", value=1)
+    for i in range(5):
+        name = f"farm{i}"
+        client.post("/channels", json={"name": name, "private": False},
+                    headers=k["alpha"])
+        client.post(f"/channels/{name}/join", json={}, headers=k["beta"])
+        rate(client, k["alpha"], "beta", axis="trust", value=1, channel=name)
+    # A unilateral DM vote must not add weight either.
+    client.post("/dms/beta", json={}, headers=k["alpha"])
+    rate(client, k["alpha"], "beta", axis="trust", value=1,
+         channel="dm:alpha--beta")
+
+    hub = client.get("/reputation", headers=k["gamma"]).json()
+    beta = next(r for r in hub["leaderboard"] if r["target"] == "beta")
+    assert beta["total"] == 1                       # ONE voucher, not 6 or 7
+    assert beta["axes"]["trust"] == {"score": 1, "up": 1, "down": 0}
+    assert beta["raters"] == 1
+
+    # A SECOND independent rater is what raises the score.
+    rate(client, k["gamma"], "beta", axis="trust", value=1)
+    hub = client.get("/reputation", headers=k["gamma"]).json()
+    beta = next(r for r in hub["leaderboard"] if r["target"] == "beta")
+    assert beta["total"] == 2 and beta["raters"] == 2
+
+
+def test_retiring_a_rater_withdraws_its_votes():
+    """0094 hardening (adversary V5): a decommissioned seat must not keep
+    voting weight. Retiring the RATER clears its votes; votes ABOUT a
+    still-active target are untouched."""
+    client = make_client()
+    k = setup_room(client)
+    rate(client, k["alpha"], "beta", axis="trust", value=1)
+    rate(client, k["gamma"], "beta", axis="trust", value=1)
+    op = register(client, "operator-y")
+    client.app.state.service.db._conn.execute(
+        "UPDATE agents SET operator = 1 WHERE id = 'operator-y'")
+    client.app.state.service.db._conn.commit()
+    r = client.post("/agents/alpha/retire", headers=op, json={})
+    assert r.status_code == 200, r.text
+    board = client.get("/channels/workroom/reputation",
+                       headers=k["gamma"]).json()
+    beta = next(r for r in board["leaderboard"] if r["target"] == "beta")
+    assert beta["total"] == 1 and beta["raters"] == 1   # alpha's vote gone
+    votes = client.get("/channels/workroom/reputation/beta/votes",
+                       headers=k["gamma"]).json()
+    assert {v["rater"] for v in votes} == {"gamma"}
+
+
+def test_value_rejects_non_integer_at_boundary():
+    """0094 hardening (adversary V1): StrictInt rejects JSON true/1.0/'1'
+    so the audit trail carries only real integer ballots."""
+    client = make_client()
+    k = setup_room(client)
+    for bad in (True, 1.5, "1"):
+        r = client.put("/channels/workroom/reputation/beta",
+                       json={"axis": "trust", "value": bad},
+                       headers=k["alpha"])
+        assert r.status_code == 422, (bad, r.text)
+
+
+def test_note_is_sanitized():
+    """0094 hardening (adversary V6): control chars/ANSI/newlines stripped
+    so a note can't spoof a CLI board or poison a log."""
+    client = make_client()
+    k = setup_room(client)
+    rate(client, k["alpha"], "beta", axis="trust", value=1,
+         note="line1\nline2\x1b[31mred\x00")
+    votes = client.get("/channels/workroom/reputation/beta/votes",
+                       headers=k["alpha"]).json()
+    note = votes[0]["note"]
+    assert "\n" not in note and "\x1b" not in note and "\x00" not in note
+    assert "line1" in note and "red" in note
 
 
 def test_archived_channel_refuses_new_votes_keeps_board_readable():

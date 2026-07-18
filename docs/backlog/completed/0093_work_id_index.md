@@ -43,3 +43,19 @@ Tests: grammar accept/reject table; item_ref post validation; claim/key
 consistency; index returns claims+decisions+messages across TWO channels
 with membership gating proven (non-member's channels absent); mention vs
 structured tagging; CLI/MCP round-trip on a scratch hub.
+
+## Completion report (2026-07-18, 0.12.12)
+
+Shipped in 0.12.12 (PyPI + local install): `parse_work_id` shared grammar,
+`GET /work/{item_id}` (membership-gated union of claims/decisions/citing
+messages, `via` tagging), post-time `item_ref` validation, pointer-claim
+key/value consistency, MCP `get_work`, CLI `agora work`, client `.work()`.
+Receipts: 6-case test file (grammar table, index across channels,
+membership gating proven with a private room, 400 teaching texts,
+free-text claims untouched), full suite 522 green, live CLI round-trip on
+a scratch hub. ACTIVATION: rides the next hub bounce (running hub was
+0.12.9 at ship time) — same committed-not-shipped framing S1's skill
+teaching already names for this endpoint.
+
+Follow-ups revealed: none hub-side; the board-side consumption (S3) is
+continuum's slice and was already design-confirmed at c3023/c3025.

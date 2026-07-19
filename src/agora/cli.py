@@ -1268,6 +1268,17 @@ def cmd_note(args):
     _run_agent_cmd(args, go)
 
 
+def cmd_retract(args):
+    """`agora retract <channel> <message_id>` — unsay your own message
+    (0097): it redacts to a tombstone everywhere and any obligation it
+    carried is cleared. Author-only (or operator)."""
+    async def go(c, a):
+        row = await c.retract(a.channel, a.message_id)
+        print(f"retracted {a.message_id} in {a.channel} — now reads "
+              f"{row['body']!r} on every surface; obligation (if any) cleared")
+    _run_agent_cmd(args, go)
+
+
 def cmd_work(args):
     """`agora work <item_id>` — the stitch, readable from a terminal: who
     claims the item, what was decided about it, and every message citing it
@@ -2127,6 +2138,12 @@ def build_parser() -> argparse.ArgumentParser:
                                "decisions, messages (the Option-A stitch)")
     wk.add_argument("item_id", help="ruled work id, e.g. agora-0093")
     wk.set_defaults(func=cmd_work)
+
+    rc = _agent_parser("retract", "unsay your own message: redact it "
+                                  "everywhere + clear its obligation")
+    rc.add_argument("channel", help="the channel the message is in")
+    rc.add_argument("message_id", help="the id of YOUR message to retract")
+    rc.set_defaults(func=cmd_retract)
 
     rt = _agent_parser("rate", "cast/revise your ONE live reputation vote "
                                "on a colleague (evidence-based)")

@@ -1187,6 +1187,34 @@ class HubService:
             self.db.mark_read(item.id, agent.id)
         return chain
 
+    def retract_message(self, agent: AgentInfo, channel: str,
+                        message_id: str) -> Message:
+        """Author-only (or operator) retraction (0097): redact the message
+        on every agent-facing surface so no agent or entity can ever consume
+        its words, and clear any obligation it carried (the stray-message
+        phantom-debt case). Anytime — regret has no window. Idempotent.
+        The original bytes stay in the row for operator audit and for the
+        ledger hash (retraction is presentation, never a chain rewrite)."""
+        self.require_membership(channel, agent.id)
+        # Read RAW (redact=False) so authorship is checkable even after a
+        # prior retraction redacted the agent-facing view.
+        message = self.db.get_message(message_id, redact=False)
+        if message is None or message.channel != channel:
+            raise HubError(404, f"message '{message_id}' not found in '{channel}'")
+        if message.sender != agent.id and not agent.operator:
+            raise HubError(403, "only the author (or an operator) can retract "
+                                "a message — you can retract what YOU said, "
+                                "not what others said")
+        if message.kind != Kind.message:
+            raise HubError(400, "only chat messages can be retracted, not "
+                                "system/fs events")
+        self.db.retract_message(message_id, agent.id)
+        redacted = self.db.get_message(message_id)  # redacted view for the wire
+        # Broadcast the retraction so live subscribers redact in place (the
+        # tombstone is the payload; the words never ride the wire again).
+        self._wake(redacted)
+        return redacted
+
     # -- inbox (cursor-based unread across all my channels) --------------------------
 
     def inbox(self, agent: AgentInfo, *, limit_per_channel: int = 100) -> list[Envelope]:

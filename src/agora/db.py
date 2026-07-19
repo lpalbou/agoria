@@ -95,6 +95,8 @@ CREATE TABLE IF NOT EXISTS messages (
     reply_to    TEXT,
     created_at  REAL NOT NULL,
     hash        TEXT,               -- per-channel hash chain (ledger/verbatim)
+    retracted_at   REAL,            -- author/operator retraction (0097): redact-at-read
+    retracted_by   TEXT,            -- who retracted (author or an operator)
     UNIQUE (channel, seq)
 );
 CREATE INDEX IF NOT EXISTS idx_messages_channel_seq ON messages (channel, seq);
@@ -281,6 +283,13 @@ class Database:
             cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(messages)")}
             if "hash" not in cols:
                 self._conn.execute("ALTER TABLE messages ADD COLUMN hash TEXT")
+            # Message retraction (0097): redact-at-read columns on a
+            # pre-existing table. NULL = live (never retracted), so the
+            # migration is a no-op for all existing rows.
+            if "retracted_at" not in cols:
+                self._conn.execute("ALTER TABLE messages ADD COLUMN retracted_at REAL")
+            if "retracted_by" not in cols:
+                self._conn.execute("ALTER TABLE messages ADD COLUMN retracted_by TEXT")
             # Channel archive (0090) + agent retirement (0089): lifecycle
             # columns added to pre-existing tables. Older rows default NULL
             # (live / active), so the migration is a no-op for existing state.
@@ -872,7 +881,7 @@ class Database:
                     broken_at = r["seq"]
                 prev_hash = ""
                 continue
-            m = self._row_to_message(r)
+            m = self._row_to_message(r, redact=False)  # hash commits to ORIGINAL bytes
             expect = self._ledger_hash(
                 prev_hash, id=m.id, channel=m.channel, seq=m.seq, sender=m.sender,
                 kind=m.kind.value if hasattr(m.kind, "value") else m.kind,
@@ -889,10 +898,10 @@ class Database:
         return {"ok": broken_at is None, "head": head, "count": chained,
                 "broken_at": broken_at}
 
-    def get_message(self, message_id: str) -> Message | None:
+    def get_message(self, message_id: str, *, redact: bool = True) -> Message | None:
         with self._lock:
             row = self._conn.execute("SELECT * FROM messages WHERE id = ?", (message_id,)).fetchone()
-        return self._row_to_message(row) if row else None
+        return self._row_to_message(row, redact=redact) if row else None
 
     def get_messages(self, channel: str, since_seq: int = 0, limit: int = 200) -> list[Message]:
         with self._lock:
@@ -902,6 +911,19 @@ class Database:
             ).fetchall()
         return [self._row_to_message(r) for r in rows]
 
+    def retract_message(self, message_id: str, by: str) -> None:
+        """Mark a message retracted (0097): redact-at-read on every
+        agent-facing surface, original bytes preserved in the row for
+        operator audit and for the ledger hash (which commits to the
+        original — retraction is presentation, not a chain rewrite).
+        Idempotent; first retractor's identity/time stick."""
+        with self._lock:
+            self._conn.execute(
+                "UPDATE messages SET retracted_at = COALESCE(retracted_at, ?), "
+                "retracted_by = COALESCE(retracted_by, ?) WHERE id = ?",
+                (time.time(), by, message_id))
+            self._conn.commit()
+
     def last_seq(self, channel: str) -> int:
         with self._lock:
             row = self._conn.execute(
@@ -910,14 +932,33 @@ class Database:
         return row["s"]
 
     @staticmethod
-    def _row_to_message(r: sqlite3.Row) -> Message:
+    def _row_to_message(r: sqlite3.Row, *, redact: bool = True) -> Message:
+        keys = r.keys()
+        retracted_at = r["retracted_at"] if "retracted_at" in keys else None
+        retracted_by = r["retracted_by"] if "retracted_by" in keys else None
+        title, body = r["title"], r["body"]
+        data = json.loads(r["data"]) if r["data"] else None
+        status = r["status"]
+        # Redact-at-read (0097): a retracted message serves a tombstone on
+        # every agent-facing surface — the words are unreachable through any
+        # API, so a future entity can never consume them, AND its status
+        # downgrades to fyi so it obliges nobody (an open message you
+        # retract must stop showing as an unanswered question). `redact=False`
+        # is for the ledger's hash verification ONLY (it commits to the
+        # original bytes + original status, preserved for operator audit).
+        if retracted_at is not None and redact:
+            title = ""
+            body = f"[retracted by {retracted_by or r['sender']}]"
+            data = None  # drop asks/answers/attachments: nothing consumable
+            status = "fyi"
         return Message(
             id=r["id"], channel=r["channel"], seq=r["seq"], sender=r["sender"],
-            kind=r["kind"], status=r["status"], urgency=r["urgency"],
+            kind=r["kind"], status=status, urgency=r["urgency"],
             critical=bool(r["critical"]), downgraded=bool(r["downgraded"]),
-            to=json.loads(r["to_agents"]), title=r["title"],
-            body=r["body"], data=json.loads(r["data"]) if r["data"] else None,
+            to=json.loads(r["to_agents"]), title=title,
+            body=body, data=data,
             reply_to=r["reply_to"], created_at=r["created_at"],
+            retracted=retracted_at is not None, retracted_at=retracted_at,
         )
 
     # -- read receipts (body reads; distinct from triage cursors) ---------------
@@ -948,6 +989,7 @@ class Database:
                 f"""
                 SELECT m.* FROM messages m
                 WHERE m.critical = 1 AND m.sender != ? AND m.channel IN ({placeholders})
+                  AND m.retracted_at IS NULL
                   AND NOT EXISTS (SELECT 1 FROM reads r
                                   WHERE r.message_id = m.id AND r.agent_id = ?)
                 ORDER BY m.created_at
@@ -985,6 +1027,7 @@ class Database:
                 SELECT m.* FROM messages m
                 WHERE m.status IN ('open', 'blocked') AND m.sender != ?
                   AND m.channel IN ({placeholders})
+                  AND m.retracted_at IS NULL
                 ORDER BY m.created_at
                 """,
                 (agent_id, *channels),
@@ -1004,6 +1047,7 @@ class Database:
                 SELECT m.* FROM messages m
                 WHERE m.status IN ('open', 'blocked')
                   AND m.channel IN ({placeholders})
+                  AND m.retracted_at IS NULL
                 ORDER BY m.created_at
                 """,
                 (*channels,),

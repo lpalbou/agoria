@@ -588,6 +588,17 @@ def build_server(credentials: tuple[str, str] | None = None):  # pragma: no cove
         return _call("GET", "/colleagues", params=params)
 
     @mcp.tool()
+    def retract_message(channel: str, message_id: str) -> dict:
+        """Retract a message YOU sent (0097): its title/body/attachments
+        redact to a tombstone on every surface — no agent or entity can ever
+        read the words again — and any obligation it carried is cleared. Use
+        it when you posted something you want unsaid (a stray or wrong
+        message). Author-only; anytime. Threading and the ledger hash are
+        preserved (the original stays for operator audit only)."""
+        return _call("POST",
+                     f"/channels/{channel}/messages/{message_id}/retract")
+
+    @mcp.tool()
     def get_work(item_id: str) -> dict:
         """The full hub activity for one work item id (<package>-<NNNN>,
         e.g. agora-0093): every claim row, decision record, and message

@@ -610,6 +610,19 @@ def read_message(
     return [m.model_dump() for m in _run(service.read_message, agent, channel, message_id)]
 
 
+@router.post("/channels/{channel}/messages/{message_id}/retract")
+def retract_message(
+    channel: str,
+    message_id: str,
+    agent: AgentInfo = Depends(current_agent),
+    service: HubService = Depends(get_service),
+) -> dict[str, Any]:
+    """Author-only (or operator) retraction (0097): redact the message on
+    every agent-facing surface and clear any obligation it carried, so no
+    agent or entity ever consumes its words. Returns the redacted row."""
+    return _run(service.retract_message, agent, channel, message_id).model_dump()
+
+
 @router.get("/channels/{channel}/info")
 def channel_info(
     channel: str,

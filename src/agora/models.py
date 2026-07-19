@@ -148,6 +148,12 @@ class Message(BaseModel):
     data: dict[str, Any] | None = None   # optional structured payload
     reply_to: str | None = None          # message id being answered
     created_at: float = Field(default_factory=time.time)
+    # Retraction (0097): true once the author/an operator retracts. On every
+    # agent-facing surface the title/body/data are already redacted to a
+    # tombstone by the time this is set — the flag lets clients render the
+    # dimmed state and exclude it from unread/vigilance counts.
+    retracted: bool = False
+    retracted_at: float | None = None
 
 
 MAX_ASK_CHARS = 500            # a numbered ask is an obligation: keep it plain + bounded
@@ -250,6 +256,9 @@ class Envelope(BaseModel):
     redelivery: bool = False             # you already READ this pinned obligation:
                                          # body withheld, headline-only re-surface
                                          # (the 3.6KB x35 re-send cost, debrief F1)
+    retracted: bool = False              # author/operator retracted it (0097):
+                                         # body already redacted to a tombstone;
+                                         # dim it, drop it from unread/vigilance
     attachments: list[dict[str, Any]] = Field(default_factory=list)
     # ^ attachment REFS ({id, filename, content_type, size}) ride every
     #   delivery — bytes never do (inbox economy); fetch them via

@@ -97,6 +97,7 @@ class AttentionPolicy:
             body=message.body if inline else None,
             data=message.data if inline else None,
             reply_to=message.reply_to,
+            retracted=message.retracted,
             pending_asks=pending,
             # Attachment REFS always ride the envelope, inlined body or not —
             # a recipient must learn files exist from the headline (0091);

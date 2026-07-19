@@ -205,6 +205,12 @@ class AgoraClient:
         and citing messages across the channels this agent can read."""
         return self._json(await self._http.get(f"/work/{item_id}"))
 
+    async def retract(self, channel: str, message_id: str) -> dict[str, Any]:
+        """Retract your own message (0097): redacts it on every surface and
+        clears any obligation it carried. Author-only (or operator)."""
+        return self._json(await self._http.post(
+            f"/channels/{channel}/messages/{message_id}/retract"))
+
     async def rate(self, channel: str, target: str, axis: str, value: int,
                    note: str = "") -> dict[str, Any]:
         """Cast/revise your one live reputation vote (0094): axis in

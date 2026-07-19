@@ -284,6 +284,64 @@ def test_addressee_leaving_reverts_obligation_to_broadcast():
 
 # -- 0067: dark-episode operator alerts -------------------------------------------
 
+def test_operator_directive_reply_obliges_the_addressee():
+    """0101 (operator: 'a reply, you must answer too'): an operator's
+    ADDRESSED reply carrying a directive is an obligation the addressee owes
+    — it appears in /owed, pins in the inbox, and clears when the addressee
+    engages. Replies normally oblige nobody; this is the narrow operator
+    exception so a human order in-thread never silently drops."""
+    client = make_client()
+    op = register(client, "op", operator=True)
+    code = register(client, "code")
+    make_channel(client, op, "room", code)
+    # code posts a report (fyi), the operator replies with a DIRECTIVE.
+    report = post(client, code, body="benchmark done", status="fyi")
+    directive = post(client, op, body="redo it properly", status="reply",
+                     to=["code"], reply_to=report["id"])
+
+    owed = client.get("/owed", headers=code).json()
+    assert any(o["id"] == directive["id"] for o in owed["to_answer"]), \
+        "operator directive-reply must be an owed obligation"
+    inbox_ids = [e["id"] for e in client.get("/inbox", headers=code).json()]
+    assert directive["id"] in inbox_ids  # pinned
+
+    # code engages (replies): the obligation clears.
+    post(client, code, body="on it", status="reply", to=["op"],
+         reply_to=directive["id"])
+    owed = client.get("/owed", headers=code).json()
+    assert not any(o["id"] == directive["id"] for o in owed["to_answer"])
+
+
+def test_peer_addressed_reply_does_not_oblige():
+    """0101 stays narrow: a NON-operator addressed reply does NOT create an
+    obligation — obliging every reply would ping-pong the room."""
+    client = make_client()
+    flow = register(client, "flow")
+    code = register(client, "code")
+    make_channel(client, flow, "room", code)
+    report = post(client, code, body="report", status="fyi")
+    peer_reply = post(client, flow, body="nice, also try X", status="reply",
+                      to=["code"], reply_to=report["id"])
+    owed = client.get("/owed", headers=code).json()
+    assert not any(o["id"] == peer_reply["id"] for o in owed["to_answer"])
+
+
+def test_operator_reply_carrying_an_answer_does_not_oblige():
+    """0101: an operator reply that DISCHARGES an ask (answers=[...]) is an
+    answer, not a directive — it obliges nobody."""
+    client = make_client()
+    op = register(client, "op", operator=True)
+    code = register(client, "code")
+    make_channel(client, op, "room", code)
+    # code asks the operator; the operator answers.
+    ask = post(client, code, body="which model?", title="q", status="open",
+               to=["op"], asks=[{"id": "1", "text": "which?"}])
+    answer = post(client, op, body="use auto", status="reply", to=["code"],
+                  reply_to=ask["id"], answers=["1"])
+    owed = client.get("/owed", headers=code).json()
+    assert not any(o["id"] == answer["id"] for o in owed["to_answer"])
+
+
 def test_deaf_sweep_alerts_when_present_seat_stops_arming():
     """0098: a seat that LOOKS present (recent session activity) but whose
     reception loop went silent while it holds escalated addressed work is

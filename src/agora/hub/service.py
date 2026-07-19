@@ -1246,7 +1246,10 @@ class HubService:
         # them up.
         members_cache: dict[str, set[str]] = {}
         hub_blocked = {b["agent_id"] for b in self.db.blocks_active(self.HUB_SCOPE)}
-        for message in self.db.obligation_candidates(agent.id, channels):
+        # Operator directive-replies pin like obligations (0101): an addressed
+        # operator reply must not drop below the cursor unheard.
+        for message in (self.db.obligation_candidates(agent.id, channels)
+                        + self._directive_replies(agent.id, channels)):
             # Effective addressees = message-level `to` plus every seat named
             # by a per-ask `to` (0077): a canvass that names you in an ask IS
             # addressed to you — names living only in prose pinned nobody.
@@ -1301,6 +1304,29 @@ class HubService:
         envelopes.sort(key=lambda e: (not e.critical, not e.escalated, e.created_at))
         return envelopes
 
+    def _directive_replies(self, agent_id: str,
+                           channels: list[str]) -> list[Message]:
+        """Operator-authored ADDRESSED replies that carry a directive rather
+        than an answer (0101). Replies normally oblige nobody — obliging
+        every reply would ping-pong — but 'a reply, you must answer too'
+        (operator, 2026-07-19): when the human replies to you in-thread with
+        an order ('now do X', 'redo it properly'), that is an obligation,
+        not chatter, and it must not silently drop because status=reply is
+        not an owed class. Narrowed to keep it safe: OPERATOR senders only
+        (trusted, few, never idle), and NOT replies that carry `answers`
+        (those discharge someone's ask — they direct nobody). The addressee
+        engaging (any reply of theirs) clears it, via the same discharge
+        path as any binary obligation."""
+        ops = self.operator_ids()
+        out: list[Message] = []
+        for m in self.db.addressed_replies(channels):
+            if m.sender == agent_id or m.sender not in ops:
+                continue
+            if (m.data or {}).get("answers"):
+                continue  # an answer, not a directive
+            out.append(m)
+        return out
+
     def owed(self, agent: AgentInfo) -> dict[str, Any]:
         """The agent's outstanding debts (0079), read receipts deliberately
         IGNORED: read-but-unanswered is precisely the lurk the receipt filter
@@ -1324,7 +1350,13 @@ class HubService:
         now = time.time()
         sla_cache: dict[str, float] = {}
         to_answer: list[dict[str, Any]] = []
-        for m in self.db.open_obligations(channels):
+        # Candidates: open/blocked obligations PLUS operator directive-replies
+        # (0101) — an addressed operator reply is an order the addressee owes,
+        # not idle chatter. Both run the identical discharge/engagement checks
+        # below; a reply carries no asks, so it is a binary obligation that
+        # any reply from the addressee discharges.
+        candidates = self.db.open_obligations(channels) + self._directive_replies(agent.id, channels)
+        for m in candidates:
             if m.sender == agent.id:
                 continue
             replies = self.db.replies_to(m.id)

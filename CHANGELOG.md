@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.12.18 — 2026-07-19
+
+**An operator's addressed reply is now an obligation you owe (agora-0101,
+"a reply, you must answer too").** A live incident: the operator replied
+to a seat in-thread with a directive ("redo it properly"); because
+`status=reply` is not an owed class, the seat's owed-counter read 0, the
+arm-time backlog wake never fired, and the order sat ~1h unanswered while
+the seat triaged elsewhere. Replies deliberately oblige nobody — a peer
+answering your ask is discharge, and obliging every reply would ping-pong
+the room — so the fix is narrow: an ADDRESSED reply from an OPERATOR that
+does NOT itself carry an `answers` discharge is treated as a binary
+obligation on its named recipients. It now appears in `/owed`, pins in the
+inbox, and fires the arm-time wake, so a human order in-thread reaches the
+seat through every reception path; the addressee's own reply clears it via
+the same discharge logic as any obligation. Peer replies and
+answer-carrying operator replies are untouched.
+
 ## 0.12.17 — 2026-07-19
 
 **DEAF-seat detection: the hub now sees a dead listener behind a

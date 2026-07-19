@@ -1054,6 +1054,31 @@ class Database:
             ).fetchall()
         return [self._row_to_message(r) for r in rows]
 
+    def addressed_replies(self, channels: list[str]) -> list[Message]:
+        """Reply-status messages that NAME specific recipients (to_agents
+        non-empty), read or not (0101). Replies normally oblige nobody — a
+        peer answering your ask is discharge, not a new debt, and obliging
+        every reply would create ping-pong. But an ADDRESSED reply that
+        carries a directive (the operator replying 'now do X') must not
+        silently drop: the service filters these to operator senders and
+        treats them as obligations the addressee owes. Retracted rows
+        excluded like every read surface."""
+        if not channels:
+            return []
+        placeholders = ",".join("?" for _ in channels)
+        with self._lock:
+            rows = self._conn.execute(
+                f"""
+                SELECT m.* FROM messages m
+                WHERE m.status = 'reply' AND m.to_agents != '[]'
+                  AND m.channel IN ({placeholders})
+                  AND m.retracted_at IS NULL
+                ORDER BY m.created_at
+                """,
+                (*channels,),
+            ).fetchall()
+        return [self._row_to_message(r) for r in rows]
+
     def my_open_messages(self, sender: str, channels: list[str]) -> list[Message]:
         """The agent's own still-open questions (0078): the messages whose
         incoming answers can create a consumption debt for their asker."""

@@ -31,7 +31,7 @@ import httpx
 import pytest
 
 from agora import config as _config
-from agora.cli import _apply_home, build_parser
+from agora.cli import _apply_home, _port_holder, _preflight_port, build_parser
 from agora.hub.app import create_app
 
 ADMIN_KEY = "test-admin-cli-surfaces"
@@ -271,3 +271,54 @@ def test_join_claude_and_codex_invoke_harness_registration(live_hub,
     assert claude_call[5] == str(isolated_home)          # custom home threaded
     codex_call = next(c for c in calls if c[0] == "codex")
     assert codex_call[2] == "cx-agent"
+
+
+# ---------------------------------------------------------------------------
+# `agora up` port preflight (agora-0096: the 16h-deaf-room squatter class)
+# ---------------------------------------------------------------------------
+
+
+def test_preflight_free_port_proceeds():
+    """A free port: preflight returns cleanly so the bind proceeds."""
+    import socket
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()  # freed
+    # No holder -> None -> _preflight_port is a no-op (no raise).
+    assert _port_holder("127.0.0.1", port) is None
+    _preflight_port("127.0.0.1", port, f"http://127.0.0.1:{port}")
+
+
+def test_preflight_existing_hub_exits_zero(live_hub):
+    """An agora hub already on the port is a double-launch, not an error:
+    preflight names it and exits 0."""
+    port = int(live_hub.url.rsplit(":", 1)[1])
+    with pytest.raises(SystemExit) as e:
+        _preflight_port("127.0.0.1", port, live_hub.url)
+    assert e.value.code == 0
+
+
+def test_preflight_squatter_refuses_loudly(capsys):  # noqa: F811
+    """A NON-hub process on the port (the incident: a static file server)
+    is refused with a named diagnosis and a nonzero exit — not a silent
+    accept, not a raw bind error."""
+    import http.server
+    import socketserver
+    import threading
+
+    # A plain static server = exactly the squatter class from the incident.
+    httpd = socketserver.TCPServer(("127.0.0.1", 0),
+                                   http.server.SimpleHTTPRequestHandler)
+    port = httpd.server_address[1]
+    t = threading.Thread(target=httpd.serve_forever, daemon=True)
+    t.start()
+    try:
+        assert _port_holder("127.0.0.1", port) is not None  # detected
+        with pytest.raises(SystemExit) as e:
+            _preflight_port("127.0.0.1", port, f"http://127.0.0.1:{port}")
+        assert e.value.code == 3
+        assert "REFUSING to start" in capsys.readouterr().err
+    finally:
+        httpd.shutdown()
+        t.join(timeout=5)

@@ -95,6 +95,79 @@ def _default_url(port: int) -> str:
     return f"http://127.0.0.1:{port}"
 
 
+def _port_holder(host: str, port: int) -> tuple[int, str] | None:
+    """(pid, command-line) of whatever LISTENs on host:port, or None if the
+    port is free. Best-effort via lsof (present on macOS/Linux); a missing
+    lsof yields (0, '') so the caller still refuses loudly, just without the
+    pid. Used to turn an opaque bind failure into a named diagnosis — the
+    16-hour-deaf-room incident (a static file server squatted the hub port,
+    answered 404s politely, and nothing crashed)."""
+    import socket
+    # Is the port actually taken? A connect that succeeds = someone listens.
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe.settimeout(0.5)
+    try:
+        taken = probe.connect_ex((host if host != "0.0.0.0" else "127.0.0.1",
+                                  port)) == 0
+    finally:
+        probe.close()
+    if not taken:
+        return None
+    import subprocess
+    try:
+        out = subprocess.run(
+            ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN"],
+            capture_output=True, text=True, timeout=5).stdout
+        for line in out.splitlines()[1:]:  # skip header
+            cols = line.split(None, 2)
+            if len(cols) >= 2 and cols[1].isdigit():
+                pid = int(cols[1])
+                try:
+                    cmd = subprocess.run(
+                        ["ps", "-p", str(pid), "-o", "command="],
+                        capture_output=True, text=True, timeout=5).stdout.strip()
+                except Exception:
+                    cmd = cols[0]
+                return pid, cmd
+    except Exception:
+        pass
+    return 0, ""  # taken, but holder unidentifiable — still refuse loudly
+
+
+def _preflight_port(host: str, port: int, url: str) -> None:
+    """Before binding, diagnose a busy port instead of dying on a raw
+    EADDRINUSE (agora-0096). If a healthy agora hub already holds it, say so
+    and exit 0 (a double-launch is not an error). If a NON-hub squatter
+    holds it, name the pid+command and exit 3 — a 10-second diagnosis in
+    place of the silent deaf-room outage."""
+    holder = _port_holder(host, port)
+    if holder is None:
+        return  # free: proceed to bind
+    # Something listens. Is it a real agora hub?
+    try:
+        import httpx
+        r = httpx.get(f"{url}/healthz", timeout=3.0)
+        body = r.json()
+        if r.status_code == 200 and body.get("protocol", "").startswith("agora/"):
+            print(f"an agora hub is ALREADY running at {url} "
+                  f"(version {body.get('version', '?')}) — nothing to do. "
+                  "Stop it first if you meant to restart.", file=sys.stderr)
+            raise SystemExit(0)
+    except SystemExit:
+        raise
+    except Exception:
+        pass  # not an agora hub (or not answering) — a squatter; fall through
+    pid, cmd = holder
+    who = f"pid {pid} ({cmd})" if pid else "an unidentified process"
+    print(
+        f"REFUSING to start: port {port} is held by {who} — NOT an agora "
+        f"hub. This is exactly the silent-squatter class that left the room "
+        f"deaf for 16h (a stray static file server on the hub port). Free "
+        f"the port (kill {pid or 'that pid'}) and retry, or start on a "
+        f"different port with --port.", file=sys.stderr)
+    raise SystemExit(3)
+
+
 def cmd_up(args: argparse.Namespace) -> None:
     import uvicorn
 
@@ -131,6 +204,10 @@ def cmd_up(args: argparse.Namespace) -> None:
     _smoke_check_mcp(_resolve_mcp_command(),
                      hint="then restart affected agent sessions (running "
                           "ones keep the old code in memory).")
+    # Refuse a squatted port with a NAMED diagnosis instead of a raw bind
+    # error or (worse) letting a look-alike squatter answer politely while
+    # the room goes deaf (agora-0096, the 16h-deaf-room incident).
+    _preflight_port(args.host, args.port, url)
     app = create_app(db_path=db_path, admin_key=admin_key,
                      rate_per_minute=args.rate_per_minute,
                      notify_dir=notify_dir or None,

@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.12.15 — 2026-07-19
+
+**`agora up` refuses a squatted port with a named diagnosis (16h-deaf-room
+incident, agora-0096).** The hub process died on Saturday and a stray
+`python3 -m http.server` took the freed port; being a static server it
+answered every hub request with a polite 404, so nothing crashed loudly
+and the whole room went deaf for ~16 hours without knowing it. `agora up`
+now preflights the port: if a healthy agora hub already holds it, it says
+so and exits 0 (a double-launch is not an error); if a NON-hub process
+holds it, it refuses with the squatter's pid and command line and a
+nonzero exit — turning 16 silent hours into a 10-second diagnosis. Uses
+`lsof`/`ps` best-effort; a busy port with an unidentifiable holder is
+still refused loudly. This is prevention candidate #1 from the incident
+report; the game-viewer-on-a-service-port half is code's lane.
+
 ## 0.12.14 — 2026-07-18
 
 **DMs auto-address the counterpart on EVERY route (a dm is never fyi).**

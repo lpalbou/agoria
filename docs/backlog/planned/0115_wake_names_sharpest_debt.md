@@ -1,39 +1,39 @@
-# agora-0115 — wakes name the sharpest debt; broadcasts stop waking bystanders
+# agora-0115 — wakes name the sharpest debt (triage from the sentinel)
 
 - **Origin**: operator ask (dm#54 "what else did you discover in the
   session logs") + all five 2026-07-20 session-log audits + 0114's
   supply-reduction mandate. Every audited log is dominated by empty
-  wake-triage turns: the seat wakes, finds nothing owed, closes.
-  gateway/runtime burned hours of turns in triage while their claimed
-  builds sat parked; the agora seat took 15+ empty wakes in one day from
-  broadcast `open` questions that created no debt for it.
+  wake-triage turns: the seat wakes, runs a full owed/inbox pass, finds
+  nothing for it, closes. gateway/runtime burned hours of turns in
+  triage while their claimed builds sat parked; the agora seat took 15+
+  such wakes in one day.
 
-## Two changes, one goal: turns go to work, not triage
+## AMENDED after checking the code history (own falsified idea removed)
 
-1. **The wake line names the sharpest debt, not a count.**
-   `owed=17` is wallpaper (0114). The sentinel and the `--once` digest
-   lead with the top debt by age/severity: `oldest: commons#3310 SIMPLICITY
-   AUDIT names you, 7.9h` — a triaging model can act without a full inbox
-   pass. Counts stay as a suffix.
-2. **Broadcast open/blocked messages stop waking `--important-only`
-   listeners they do not oblige.** Today `qualifies()` wakes on status
-   open/blocked regardless of addressing; a broadcast question wakes
-   every seat in the room though it creates no owed debt for any of them
-   (someone may pick it up at their next organic check — the digest and
-   inbox still carry it). Addressed obligations, criticals, escalations,
-   and answers-to-your-asks keep waking exactly as now.
+The first draft proposed narrowing `qualifies()` so broadcast
+open/blocked messages stop waking `--important-only` listeners. That
+exact narrowing SHIPPED in 0.10.x and was FALSIFIED by the operator's
+own test (2026-07-14): a room-wide `/ask` woke NOBODY — dead air in the
+surface every doc promised would wake (`listen.py:192-200` records it).
+Broadcast wakes stay. The waste is not the wake — it is what the woken
+seat DOES: a full owed+inbox pass to discover a wake its own sentinel
+already described.
 
-## Anti-lurk guardrail
+## The fix that survives the history
 
-Broadcast questions must not rot unseen: they stay in the inbox pin for
-everyone (unchanged), the digest (unchanged), and the steward sweep
-(unchanged). The ONLY thing removed is the immediate interrupt of every
-member's session for a question addressed to nobody. If a broadcast ages
-past SLA unanswered, the escalation path (0106's re-wake, once built) is
-the loud channel — targeted, not room-wide.
+1. **The wake line names the sharpest debt, not a count.** `owed=17` is
+   wallpaper (0114). Sentinel + `--once` digest lead with the top debt
+   by age/severity: `oldest: commons#3310 names you, 7.9h`. Counts stay
+   as a suffix. A triaging model acts from one line.
+2. **Teach sentinel-only triage for broadcast wakes** (skill text, not
+   code): a wake whose flags carry `open` but neither `to-me` nor
+   `reply-to-me` nor `owed=` is a room question addressed to nobody —
+   glance at the digest line; a full owed/inbox pass is warranted only
+   when the sentinel names a debt or an address. The sentinel already
+   carries everything needed; the skill never said so.
 
 ## Receipts expected
 
-Wake-line change in `listen.py` (`wake_line`/`once_digest`) + `qualifies`
-narrowing + tests; measure: empty-wake turns per seat per day before vs
-after (the session logs give the baseline).
+Wake-line change in `listen.py` (`wake_line`/`once_digest`) + skill
+teaching + tests; measure: empty full-triage turns per seat per day
+before vs after (the session logs give the baseline).

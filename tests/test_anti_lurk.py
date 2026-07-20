@@ -394,6 +394,11 @@ def test_prose_after_the_state_word_and_parked_claims(client, room):
         client.put(f"/channels/canvass/store/claim:{slug}", headers=_auth(key),
                    json={"value": {"owner": "named", "status": status},
                          "expect_version": 0})
+    # c3363 second axis: the word under the legacy STATE key still counts
+    # (a row closed under the wrong key must not nag forever).
+    client.put("/channels/canvass/store/claim:state-key", headers=_auth(key),
+               json={"value": {"owner": "named", "state": "done, receipt c9"},
+                     "expect_version": 0})
     client.put("/channels/canvass/store/claim:still-live", headers=_auth(key),
                json={"value": {"owner": "named", "status": "doneish is not done"},
                      "expect_version": 0})
@@ -407,7 +412,7 @@ def test_prose_after_the_state_word_and_parked_claims(client, room):
     alerts = service.db.get_messages("hub-alerts", 0, 50)
     alert = next(m for m in reversed(alerts) if "STALE CLAIMS" in m.body)
     assert "claim:still-live" in alert.body
-    for quiet in ("prose-done", "prose-closed", "parked-a"):
+    for quiet in ("prose-done", "prose-closed", "parked-a", "state-key"):
         assert quiet not in alert.body
 
     # Board: prose-DONE/CLOSED rows are terminal (out of in_progress);

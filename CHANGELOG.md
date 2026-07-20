@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.12.20 — 2026-07-20
+
+**Directive debts are epoch-bounded (0102 hardening, field report c3379).**
+The morning after 0.12.19, seats woke to 15+ "answer obligations" dated
+Jul 10-11 — weeks-old settled traffic turned into phantom debts, because
+the new addressed-reply class applied to the whole message history.
+Semantics changes must not rewrite the past: the hub now persists a
+`directive_debt_epoch` (set once, first boot on >=0.12.20) and peer
+reply/fyi debts exist only for messages posted after it. OPERATOR-addressed
+words stay unbounded — few, human, and surfacing a buried directive is
+exactly what 0101/0102 exist for. Also: claim-status vocabulary reads the
+legacy `state` key as an alias when no `status` exists (c3363's second
+axis — a row closed under the wrong key must not nag forever; `status`
+stays the only taught key).
+
 ## 0.12.19 — 2026-07-20
 
 **A message that names you obliges you (agora-0102) — "a reply is not

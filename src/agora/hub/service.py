@@ -176,6 +176,16 @@ class HubService:
         # Delegation grants cache (0068).
         self._delegations_cache: list[dict[str, Any]] = []
         self._delegations_cache_at = 0.0
+        # Directive-debt epoch (0102 hardening, c3379): peer reply/fyi
+        # debts exist only for messages posted AFTER the feature deployed
+        # on this hub. Applying the new owed class to history turned weeks
+        # of settled traffic into 15+ phantom debts per seat overnight —
+        # semantics changes must not rewrite the past. Persisted in the DB
+        # (set once, first boot on >=0.12.20) so every restart agrees.
+        # Operator-addressed words stay UNBOUNDED: few, human, and the
+        # buried-directive case is exactly what 0101/0102 exist for.
+        self._directive_epoch = float(self.db.meta_set_default(
+            "directive_debt_epoch", str(time.time())))
 
     def bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         """Record the serving event loop. Called by every async entry point
@@ -1365,6 +1375,10 @@ class HubService:
             return True
         if m.status != Status.reply:
             return False  # peer fyi: terminal gesture, never a debt
+        if m.created_at < self._directive_epoch:
+            # Epoch bound (c3379): posted under the old 'replies oblige
+            # nobody' semantics — it must not become a debt retroactively.
+            return False
         parent = self.db.get_message(m.reply_to) if m.reply_to else None
         return not (parent is not None and parent.sender == viewer_id)
 
@@ -2418,8 +2432,15 @@ class HubService:
     @staticmethod
     def _claim_status_word(value: dict[str, Any]) -> str:
         """First word of the claim's status, lowered, stripped of trailing
-        punctuation — the state word the vocabulary keys on."""
-        status = str(value.get("status", "")).strip().lower()
+        punctuation — the state word the vocabulary keys on. `status` is
+        the CANONICAL key (c3363 ruling); `state` is read as a legacy alias
+        when no status exists, because a row closed under the wrong key
+        must not nag its owner forever — but every taught surface says
+        status, and only status is ever written by the hub's own examples."""
+        raw = value.get("status")
+        if raw is None:
+            raw = value.get("state", "")
+        status = str(raw).strip().lower()
         first = status.split()[0] if status.split() else ""
         return first.rstrip(".,;:!—-")
 

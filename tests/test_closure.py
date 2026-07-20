@@ -422,6 +422,33 @@ def test_directive_debt_cleared_by_authoritative_closure():
     assert not any(o["id"] == directive["id"] for o in owed["to_answer"])
 
 
+def test_peer_directive_debts_are_epoch_bounded():
+    """0102 hardening (c3379): a peer reply posted BEFORE this hub learned
+    the directive-debt semantics must not become a debt retroactively —
+    the morning after 0.12.19, seats woke to 15+ phantom debts from
+    weeks-old settled traffic. Operator words stay unbounded."""
+    client = make_client()
+    op = register(client, "op", operator=True)
+    flow = register(client, "flow")
+    code = register(client, "code")
+    make_channel(client, flow, "room", code, op)
+    base = post(client, flow, body="root", status="fyi")
+    old_peer = post(client, code, body="flow: check this", status="reply",
+                    to=["flow"], reply_to=base["id"])
+    old_op = post(client, op, body="flow: directive", status="reply",
+                  to=["flow"], reply_to=base["id"])
+    # Rewind both posts to before the service's epoch.
+    service = client.app.state.service
+    service.db._conn.execute(
+        "UPDATE messages SET created_at = created_at - 86400 WHERE id IN (?,?)",
+        (old_peer["id"], old_op["id"]))
+    service.db._conn.commit()
+    owed_ids = [o["id"] for o in
+                client.get("/owed", headers=flow).json()["to_answer"]]
+    assert old_peer["id"] not in owed_ids, "pre-epoch peer reply must not oblige"
+    assert old_op["id"] in owed_ids, "operator words are epoch-unbounded"
+
+
 def test_directive_debt_escalates_past_sla():
     """0102: an ignored directive rots on the same SLA clock as an
     unanswered question — envelope.escalated flips, which is what feeds

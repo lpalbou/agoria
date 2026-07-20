@@ -238,6 +238,13 @@ CREATE TABLE IF NOT EXISTS reputation_votes (
     PRIMARY KEY (channel, target, rater, axis)
 );
 CREATE INDEX IF NOT EXISTS idx_reputation_target ON reputation_votes (target);
+-- Hub-level metadata (0.12.20): tiny key/value row set, currently the
+-- directive-debt epoch (semantics changes must not rewrite history — a
+-- message posted under old rules must not become a debt retroactively).
+CREATE TABLE IF NOT EXISTS meta (
+    key    TEXT PRIMARY KEY,
+    value  TEXT NOT NULL
+);
 """
 
 
@@ -1061,9 +1068,9 @@ class Database:
         a new debt, and obliging every reply would create ping-pong. But an
         ADDRESSED one can carry a directive ('now do X') that must not
         silently drop: the service applies the per-sender/per-viewer
-        exemptions (answers, replies-to-your-own-message, operator authority)
-        and treats the rest as obligations each named seat owes. Retracted
-        rows excluded like every read surface."""
+        exemptions (answers, replies-to-your-own-message, operator authority,
+        the pre-feature epoch) and treats the rest as obligations each named
+        seat owes. Retracted rows excluded like every read surface."""
         if not channels:
             return []
         placeholders = ",".join("?" for _ in channels)
@@ -1080,6 +1087,26 @@ class Database:
                 (*channels,),
             ).fetchall()
         return [self._row_to_message(r) for r in rows]
+
+    # -- hub metadata (tiny KV; currently the directive-debt epoch) -------------
+
+    def meta_get(self, key: str) -> str | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row else None
+
+    def meta_set_default(self, key: str, value: str) -> str:
+        """Set `key` only if absent; return the stored value either way —
+        one atomic read-or-init so every hub start agrees on the epoch."""
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR IGNORE INTO meta (key, value) VALUES (?,?)",
+                (key, value))
+            self._conn.commit()
+            row = self._conn.execute(
+                "SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+        return row["value"]
 
     def my_open_messages(self, sender: str, channels: list[str]) -> list[Message]:
         """The agent's own still-open questions (0078): the messages whose

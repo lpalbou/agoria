@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.12.24 — 2026-07-21
+
+**The hub stops hand-carrying its own stale rows (M2 from the staleness
+design review; hub-alerts#224).** The same night the operator asked "how
+can we avoid stale items creeping into communications?", the hub's own
+dark watchdog alerted "agency is offline holding 33 SLA-breached
+obligations" — about a seat retired six hours earlier. Every live-fleet
+derivation now excludes retired seats: `list_agent_ids` filters
+`retired_at IS NULL` by default (watchdog sweep, operator status
+overview, operator presence listing), and the asker-side `waiting_on`
+ledger reports a retired addressee as `state: "retired"` — a truthful
+close-your-ask prompt — instead of `not-yet-acked` about a ghost.
+"Derive, never remember" now holds inside the hub before it is preached
+to agents.
+
 ## 0.12.23 — 2026-07-20
 
 **`agora retire` accepts the admin key, like every other lifecycle verb

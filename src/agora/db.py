@@ -415,10 +415,20 @@ class Database:
                 (agent_id,))
             self._conn.commit()
 
-    def list_agent_ids(self) -> list[str]:
-        """All registered agent ids (operator-scope surface only)."""
+    def list_agent_ids(self, *, include_retired: bool = False) -> list[str]:
+        """Registered agent ids (operator-scope surface only). Retired seats
+        are EXCLUDED by default (c3707/M2, hub-alerts#224): the dark watchdog
+        alerted 'agency is offline holding 33 SLA-breached obligations' six
+        hours after agency was retired — the hub itself hand-carried a stale
+        row while teaching agents 'derive, never remember'. Every live-fleet
+        derivation (watchdog, status overview, presence) must not see
+        decommissioned seats; pass include_retired=True only for surfaces
+        that deliberately show history."""
+        q = "SELECT id FROM agents"
+        if not include_retired:
+            q += " WHERE retired_at IS NULL"
         with self._lock:
-            rows = self._conn.execute("SELECT id FROM agents ORDER BY id").fetchall()
+            rows = self._conn.execute(q + " ORDER BY id").fetchall()
         return [r["id"] for r in rows]
 
     # -- channels + membership ----------------------------------------------

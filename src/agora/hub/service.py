@@ -1577,12 +1577,19 @@ class HubService:
                     key = (seat, m.channel)
                     if key not in cursor_cache:
                         cursor_cache[key] = self.db.get_cursor(seat, m.channel)
+                    # A RETIRED addressee is a truthful terminal state (M2):
+                    # 'not-yet-acked' about a decommissioned seat is the
+                    # hub serving a stale row — say 'retired', which is a
+                    # close-your-ask prompt, not a wait.
+                    if self.db.agent_retirement(seat) is not None:
+                        state = "retired"
+                    elif cursor_cache[key] >= m.seq:
+                        state = "acked-past-no-reply"
+                    else:
+                        state = "not-yet-acked"
                     waiting_on.append({
                         "channel": m.channel, "seq": m.seq, "ask": str(a["id"]),
-                        "seat": seat,
-                        "state": ("acked-past-no-reply"
-                                  if cursor_cache[key] >= m.seq
-                                  else "not-yet-acked"),
+                        "seat": seat, "state": state,
                     })
         return {"to_answer": to_answer, "to_consume": to_consume,
                 "waiting_on": waiting_on,

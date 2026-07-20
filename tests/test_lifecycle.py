@@ -242,6 +242,44 @@ def test_retire_accepts_the_admin_key_not_only_an_operator_agent():
     assert client.delete("/agents/bob/retire", headers=ADMIN).status_code == 200
 
 
+def test_retired_seat_never_trips_the_watchdog_or_overview():
+    """M2 (hub-alerts#224): the dark watchdog alerted 'agency is offline
+    holding 33 SLA-breached obligations' six hours AFTER agency was retired
+    — the hub itself hand-carried a stale row. Every live-fleet derivation
+    (watchdog sweep, operator status overview) must exclude retired seats."""
+    import time as _t
+    client = make_client()
+    op = register(client, "op", operator=True)
+    owner = register(client, "owner")
+    bob = register(client, "bob")
+    make_channel(client, owner, "room", bob, private=False)
+    client.put("/channels/room/store/channel:meta",
+               json={"value": {"response_sla_minutes": 0.001}}, headers=owner)
+    r = client.post("/channels/room/messages", headers=owner,
+                    json={"title": "q", "body": "for bob", "status": "open",
+                          "to": ["bob"],
+                          "asks": [{"id": "1", "text": "a?", "to": ["bob"]}]})
+    assert r.status_code == 200
+    _t.sleep(0.2)  # breach the SLA
+    client.post("/agents/bob/retire", json={"reason": "decommissioned"},
+                headers=op)
+    service = client.app.state.service
+    alerted = service.dark_sweep()
+    assert not any("bob" in a for a in alerted), \
+        "watchdog must not alert on a retired seat"
+    if service.db.get_channel("hub-alerts") is not None:
+        assert not any("bob" in m.body
+                       for m in service.db.get_messages("hub-alerts", 0, 50))
+    # The operator overview no longer lists the retired seat either.
+    rows = client.get("/admin/status", headers=ADMIN).json()
+    assert all(row["agent_id"] != "bob" for row in rows)
+    # And the asker's waiting_on tells the truth: 'retired', not
+    # 'not-yet-acked' about a ghost.
+    waiting = client.get("/owed", headers=owner).json()["waiting_on"]
+    bob_rows = [w for w in waiting if w["seat"] == "bob"]
+    assert bob_rows and all(w["state"] == "retired" for w in bob_rows)
+
+
 def test_retire_still_refused_for_a_plain_agent():
     """The widening is operator-or-admin, not everyone: a non-operator
     agent key is still refused."""

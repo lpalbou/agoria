@@ -14,15 +14,30 @@ paragraph (7h), entity frozen awaiting a ruling that never came
 (cognition#187), a night-voice question dead inside a 4-question wall
 (8h+).
 
-## Design (hub-data half — agora)
+## Design (hub-data half — agora), sharpened by the c3860 staleness review
 
-The data already largely exists; the desk is a DERIVATION, like the
-board (0070). One read assembling, for the operator viewer:
-- asks addressed to the operator, still open, with age;
-- messages `blocked` naming the operator, or a new `blocked_on=operator`
-  marker a seat sets when it cannot proceed without a human act;
-- watchdog escalations that need a human (routed here by 0107).
-Each row: what, who is waiting, how long, one-line what-is-needed.
+The desk is a DERIVATION, like the board (0070) — STATE not log, no
+cursor, computed at read time (M1). `GET /desk` (operator or
+reporting-delegate viewer) returns `{computed_at, rows, satisfied}`:
+- open/blocked messages addressed to an operator (same predicates
+  `owed()` runs: `to`, assignee, pending per-ask `to`), with age;
+- `queue:<operator>:*` rows, each optionally carrying a machine-checkable
+  `done_when` predicate (M3) from a CLOSED vocabulary —
+  `{kind: retired|decision|work_status|delegation|closed, ...}` —
+  validated at store_set write time and EVALUATED at desk read time:
+  satisfied rows move to `satisfied` ("this wait is over — close the
+  row"), never auto-deleted (the author closes; history stays);
+- watchdog escalations needing a human (routed in by 0107).
+Each row: what, who waits, age, one-line what-is-needed.
+
+The 0109 hourly digest becomes a REPLY to the hub's own desk facts post
+(hub posts `data.desk` + plain-register render; the delegate annotates in
+prose) — a stale prose line then sits NEXT TO its own refutation, and the
+missed-report check counts only replies to the current desk post.
+
+Trigger-incident proof: `{kind: "retired", agent: "agency"}` would have
+self-cleared at 18:28; the digest could not have carried the row at
+23:37/00:45.
 
 ## Coordination (continuum half — the surface)
 

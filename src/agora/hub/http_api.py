@@ -1034,6 +1034,16 @@ def get_notes(
 
 # -- work-id activity index (0093): the hub half of the Option-A stitch -------------
 
+@router.get("/desk")
+def desk(
+    agent: AgentInfo = Depends(current_agent),
+    service: HubService = Depends(get_service),
+) -> dict[str, Any]:
+    """The operator's desk (0111): everything waiting on the human, derived
+    at read time — STATE not log. Operator or reporting delegate."""
+    return _run(service.desk, agent)
+
+
 @router.get("/work/{item_id}")
 def work_activity(
     item_id: str,

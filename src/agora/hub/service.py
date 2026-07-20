@@ -2436,7 +2436,21 @@ class HubService:
 
     _QUEUE_PREFIX = "queue:"
     _QUEUE_FIELDS = {"q", "options", "evidence", "waiting", "since", "tier",
-                     "default", "decided"}
+                     "default", "decided", "done_when"}
+    #: done_when (0111/M3): a queue/desk row waiting on a HUB-OBSERVABLE act
+    #: carries a machine-checkable completion predicate, evaluated at desk
+    #: read time — the row self-clears the moment the act happens, so a
+    #: "waiting on you: retire agency" row can never outlive the retirement
+    #: (the c3860 trigger incident). Closed vocabulary: waits on facts the
+    #: hub cannot observe (a PyPI click, an external CI run) carry NO
+    #: predicate and stay manual forever — that is honest, not a gap.
+    _DONE_WHEN_KINDS = {
+        "retired": ("agent",),
+        "decision": ("channel", "slug"),
+        "work_status": ("channel", "item", "status"),
+        "delegation": ("agent", "power"),
+        "closed": ("channel", "message_id"),
+    }
 
     @staticmethod
     def _validate_queue_row(value: Any) -> None:
@@ -2470,6 +2484,26 @@ class HubService:
         tier = value.get("tier")
         if tier is not None and tier not in ("operator", "delegate"):
             raise HubError(400, "queue-row tier must be 'operator' or 'delegate'")
+        done_when = value.get("done_when")
+        if done_when is not None:
+            if not isinstance(done_when, dict):
+                raise HubError(400, "done_when must be an object")
+            kind = done_when.get("kind")
+            if kind not in HubService._DONE_WHEN_KINDS:
+                raise HubError(400, "done_when.kind must be one of "
+                                    f"{'|'.join(sorted(HubService._DONE_WHEN_KINDS))}"
+                                    " — waits on facts the hub cannot observe "
+                                    "carry no predicate (they stay manual)")
+            required = HubService._DONE_WHEN_KINDS[kind]
+            missing = [f for f in required if not str(done_when.get(f, "")).strip()]
+            unknown = set(done_when) - {"kind", *required}
+            if missing or unknown:
+                raise HubError(400, f"done_when kind={kind} needs fields "
+                                    f"{list(required)}"
+                                    + (f"; missing {missing}" if missing else "")
+                                    + (f"; unknown {sorted(unknown)}" if unknown else ""))
+            value["done_when"] = {"kind": kind, **{f: sanitize_text(
+                str(done_when[f]), 128) for f in required}}
         default = value.get("default")
         if default is not None:
             if not isinstance(default, str) or len(default) > 160:
@@ -2638,6 +2672,93 @@ class HubService:
                        "pending_review": len(pending_review),
                        "done_shown": min(len(done), 20), "done_total": len(done)},
         }
+
+    # -- operator desk (0111/M1+M3): everything blocked on the human ---------------
+
+    def _done_when_satisfied(self, p: dict[str, Any]) -> bool:
+        """Evaluate a done_when predicate against LIVE hub state (M3). Every
+        kind is a fact the hub already stores; evaluation at read time is
+        what makes desk rows self-clearing — 'waiting on you: retire agency'
+        cannot outlive the retirement."""
+        kind = p.get("kind")
+        if kind == "retired":
+            return self.db.agent_retirement(str(p["agent"])) is not None
+        if kind == "decision":
+            return self.db.store_get(str(p["channel"]),
+                                     f"decision:{p['slug']}") is not None
+        if kind == "work_status":
+            row = self.db.store_get(str(p["channel"]),
+                                    f"{self.WORK_ROW_PREFIX}{p['item']}")
+            return (row is not None and isinstance(row.value, dict)
+                    and str(row.value.get("status", "")) == str(p["status"]))
+        if kind == "delegation":
+            return self.is_delegate(str(p["agent"]), str(p["power"]))
+        if kind == "closed":
+            m = self.db.get_message(str(p["message_id"]))
+            if m is None or m.channel != str(p["channel"]):
+                return False
+            return discharge_state(m, self.db.replies_to(m.id),
+                                   self.operator_ids()).closed
+        return False
+
+    def desk(self, agent: AgentInfo) -> dict[str, Any]:
+        """Everything waiting on the OPERATOR, derived at read time (0111,
+        M1 from the c3860 staleness review): STATE not log — no cursor to
+        fall behind, nothing carried forward. The trigger incident ('WAITING
+        ON YOU: agency retirement', six hours after the retirement) is
+        structurally impossible on this surface: rows are computed from hub
+        state at the moment of the call, and queue rows carrying a
+        `done_when` predicate (M3) move to `satisfied` the instant the hub
+        observes the act. Viewer gate matches /status: the operator's desk
+        is operator-facing; a reporting delegate stewards it (composes the
+        digest FROM it); it never leaks to ordinary seats ('what waits on
+        the human' is exactly what the board deliberately omits)."""
+        if not (agent.operator or self.is_delegate(agent.id, "reporting")):
+            raise HubError(403, "the desk is for operators and reporting "
+                                "delegates (whoami.delegations is the proof)")
+        now = time.time()
+        rows: list[dict[str, Any]] = []
+        satisfied: list[dict[str, Any]] = []
+        operators = sorted(self.operator_ids())
+        for op in operators:
+            info = AgentInfo(id=op, name=op, operator=True)
+            for o in self.owed(info)["to_answer"]:
+                rows.append({
+                    "kind": "ask", "operator": op,
+                    "channel": o["channel"], "seq": o["seq"], "id": o["id"],
+                    "what": o["title"] or "(untitled ask)",
+                    "who_waits": o["from"],
+                    "age_minutes": o["age_minutes"],
+                    "one_action": "answer it (or decline on the record)",
+                })
+            for channel in self.db.channels_of(op):
+                prefix = f"{self._QUEUE_PREFIX}{op}:"
+                for entry in self.db.store_keys(channel):
+                    if not entry["key"].startswith(prefix):
+                        continue
+                    stored = self.db.store_get(channel, entry["key"])
+                    if (stored is None or not isinstance(stored.value, dict)
+                            or stored.value.get("decided")):
+                        continue
+                    v = stored.value
+                    row = {
+                        "kind": "queue", "operator": op, "channel": channel,
+                        "key": entry["key"], "what": v.get("q", ""),
+                        "who_waits": ", ".join(v.get("waiting", [])) or stored.updated_by,
+                        "age_minutes": round((now - stored.updated_at) / 60, 1),
+                        "one_action": (v.get("options") or ["decide"])[0],
+                    }
+                    done_when = v.get("done_when")
+                    if isinstance(done_when, dict) and self._done_when_satisfied(done_when):
+                        satisfied.append({**row, "done_when": done_when,
+                                          "one_action": "the wait is over — "
+                                                        "close/decide the row"})
+                    else:
+                        rows.append(row)
+        rows.sort(key=lambda r: -r["age_minutes"])
+        return {"computed_at": now, "viewer": agent.id,
+                "operators": operators, "rows": rows, "satisfied": satisfied,
+                "counts": {"rows": len(rows), "satisfied": len(satisfied)}}
 
     # -- operator pause / stand-down (0069) ----------------------------------------
 

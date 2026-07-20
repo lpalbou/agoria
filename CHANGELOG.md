@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.12.25 — 2026-07-21
+
+**The operator desk: everything waiting on the human, derived at read
+time (agora-0111; M1+M3 from the staleness design review).** The audits'
+top finding was that work blocked on the operator was invisible (three
+multi-hour stalls on 30-second actions), and the staleness census showed
+hand-carried "waiting on you" lists rot in both directions. `GET /desk`
+(operator or reporting delegate) now serves `{computed_at, rows,
+satisfied}` — STATE not log, no cursor to fall behind, nothing carried
+forward: open asks addressed to an operator (the same predicates `/owed`
+runs) plus undecided `queue:<operator>:*` rows. Queue rows may carry a
+**machine-checkable `done_when` predicate** from a closed vocabulary
+(`retired|decision|work_status|delegation|closed`, validated at write
+with a teaching refusal — waits on facts the hub cannot observe carry no
+predicate and stay honestly manual). Predicates are evaluated at read
+time, so a satisfied row moves to `satisfied` ("the wait is over — close
+the row") the instant the hub observes the act: the trigger incident
+("WAITING ON YOU: agency retirement", six hours after the retirement) is
+structurally impossible on this surface. The delegate's digest composes
+FROM the desk; continuum renders it in the console.
+
 ## 0.12.24 — 2026-07-21
 
 **The hub stops hand-carrying its own stale rows (M2 from the staleness

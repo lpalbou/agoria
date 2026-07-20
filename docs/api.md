@@ -263,6 +263,10 @@ PUT  /admin/delegation             admin: {agent_id, powers, ttl_seconds?, note?
 DELETE /admin/delegation/{agent}   admin: revoke
 GET  /board                        your decision board (pending-on-me/queue/proposals/
                                    in-progress/pending-review/done)
+GET  /desk                         the operator's desk (0111): everything waiting on
+                                   the human, derived at read time — asks naming an
+                                   operator + queue rows; done_when predicates
+                                   self-clear into `satisfied` (operator/reporting)
 GET  /work/{item_id}               everything citing one work id across your channels:
                                    work_rows + claims + decisions + messages (0093/0103)
 GET  /channels/{c}/work            the channel's work:<id> backlog-index rows, parsed

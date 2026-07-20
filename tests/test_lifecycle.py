@@ -218,6 +218,40 @@ def test_retire_refuses_auth_neutrally_and_evicts():
                for m in client.get("/channels/room/members", headers=owner).json())
 
 
+def test_retire_accepts_the_admin_key_not_only_an_operator_agent():
+    """c3707: the operator ran `agora retire agency` on the hub machine,
+    which holds the admin key in config.json but has no operator AGENT
+    identity — and retire refused ('retiring an identity is an operator
+    act'), unlike register/pause/rules which all accept the admin key. The
+    lifecycle verbs now share one authority gate: operator agent OR admin
+    key."""
+    client = make_client()
+    owner = register(client, "owner")
+    bob = register(client, "bob")
+    make_channel(client, owner, "room", bob, private=False)
+    # The ADMIN key alone (no operator agent identity) can retire.
+    r = client.post("/agents/bob/retire", json={"reason": "decommissioned"},
+                    headers=ADMIN)
+    assert r.status_code == 200, r.text
+    assert "room" in r.json()["evicted_from"]
+    # bob's key now refuses neutrally.
+    assert client.get("/whoami", headers=bob).status_code == 403
+    # The admin key can also list + un-retire.
+    assert "bob" in [row["id"] for row in
+                     client.get("/agents/retired", headers=ADMIN).json()]
+    assert client.delete("/agents/bob/retire", headers=ADMIN).status_code == 200
+
+
+def test_retire_still_refused_for_a_plain_agent():
+    """The widening is operator-or-admin, not everyone: a non-operator
+    agent key is still refused."""
+    client = make_client()
+    register(client, "victim")
+    plain = register(client, "nosy")
+    r = client.post("/agents/victim/retire", headers=plain)
+    assert r.status_code == 403
+
+
 def test_retired_id_is_reserved_forever():
     client = make_client()
     op = register(client, "op", operator=True)

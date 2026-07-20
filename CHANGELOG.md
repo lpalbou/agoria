@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.12.23 — 2026-07-20
+
+**`agora retire` accepts the admin key, like every other lifecycle verb
+(agora-0089 follow-up, c3707).** The operator ran `agora retire agency` on
+the hub machine and hit `[403] retiring an identity is an operator act` —
+because retire alone demanded an operator AGENT bearer key, while the hub
+machine holds the ADMIN key (config.json) but no agent identity. Every
+sibling lifecycle/operator verb (register, pause, resume, rules, delegate,
+invite) already resolves authority as "operator agent key OR admin key";
+retire/unretire/list-retired now share that gate via a single
+`operator_or_admin` dependency (the admin key maps to a synthetic
+`operator` principal — an infra credential, never an identity that posts
+words). The CLI `agora retire` no longer requires `--as`: it uses an
+operator agent key when `--as` is given, else the admin key
+($AGORA_ADMIN_KEY, then config.json), exactly like `agora register`.
+
 ## 0.12.22 — 2026-07-20
 
 **"No more surfacing old requests" — operator directive debts are now

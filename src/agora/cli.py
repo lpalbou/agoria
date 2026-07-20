@@ -878,30 +878,56 @@ def cmd_archive_channel(args):
     _run_agent_cmd(args, go)
 
 
-def cmd_retire(args):
+def cmd_retire(args: argparse.Namespace) -> None:
     """Retire an agent (0089): neutral decommission — its key stops working,
-    it drops off rosters, its id is reserved forever. Operator only, NOT a
-    block. `--undo` restores it (it rejoins rooms explicitly)."""
-    async def go(c, a):
-        if a.list:
-            rows = c._json(await c._http.get("/agents/retired"))
-            if not rows:
-                print("no retired agents")
-            for r in rows:
-                print(f"  {r['id']:<20} {r.get('reason','') or '(no reason)'}")
-            return
-        path = f"/agents/{a.agent}/retire"
-        if a.undo:
-            c._json(await c._http.delete(path))
-            print(f"restored '{a.agent}' — it must rejoin its channels")
-        else:
-            out = c._json(await c._http.post(
-                path, json={"reason": a.reason or ""}))
-            print(f"retired '{a.agent}'"
-                  + (f" ({a.reason})" if a.reason else "")
-                  + f" — evicted from {len(out.get('evicted_from', []))} channel(s); "
-                    "id reserved, not a block")
-    _run_agent_cmd(args, go)
+    it drops off rosters, its id is reserved forever. Operator verb, NOT a
+    block. `--undo` restores it, `--list` shows retired.
+
+    Authority resolves like every sibling lifecycle verb (register/pause/
+    rules): an operator AGENT key via --as, else the hub's ADMIN key
+    ($AGORA_ADMIN_KEY, then config.json). c3707: the operator ran
+    `agora retire agency` on the hub machine, which holds the admin key but
+    no operator agent identity, and the verb refused — because retire alone
+    demanded an agent key. It no longer does."""
+    import httpx
+
+    url = _hub_url(args)
+    # Prefer an explicit operator-agent key (--as); fall back to the admin
+    # key the hub machine already holds. Either satisfies the hub's
+    # operator_or_admin gate.
+    as_id = getattr(args, "as_id", None)
+    if as_id:
+        cred = _config.resolve_key(url, as_id)
+    else:
+        cred = _admin_key_or_exit(args, url)
+    headers = {"Authorization": f"Bearer {cred}"}
+    if args.list:
+        r = httpx.get(f"{url}/agents/retired", headers=headers, timeout=10.0)
+        if r.status_code != 200:
+            sys.exit(f"listing retired agents failed: {r.status_code} {r.text}")
+        rows = r.json()
+        print("no retired agents" if not rows else "")
+        for row in rows:
+            print(f"  {row['id']:<20} {row.get('reason','') or '(no reason)'}")
+        return
+    if not args.agent:
+        sys.exit("name the agent to retire (or pass --list)")
+    path = f"{url}/agents/{args.agent}/retire"
+    if args.undo:
+        r = httpx.delete(path, headers=headers, timeout=10.0)
+        if r.status_code != 200:
+            sys.exit(f"restore failed: {r.status_code} {r.text}")
+        print(f"restored '{args.agent}' — it must rejoin its channels")
+        return
+    r = httpx.post(path, headers=headers, json={"reason": args.reason or ""},
+                   timeout=10.0)
+    if r.status_code != 200:
+        sys.exit(f"retire failed: {r.status_code} {r.text}")
+    out = r.json()
+    print(f"retired '{args.agent}'"
+          + (f" ({args.reason})" if args.reason else "")
+          + f" — evicted from {len(out.get('evicted_from', []))} channel(s); "
+            "id reserved, not a block")
 
 
 def cmd_attachment(args):
@@ -2019,11 +2045,21 @@ def build_parser() -> argparse.ArgumentParser:
     ar.add_argument("--undo", action="store_true", help="reopen an archived channel (operator only)")
     ar.set_defaults(func=cmd_archive_channel)
 
-    rt = _agent_parser("retire", "retire an agent (neutral decommission, operator only); --undo restores, --list shows retired")
+    # Operator lifecycle verb (NOT _agent_parser): authority is an operator
+    # agent key via --as OR the hub's admin key, exactly like register/pause/
+    # rules. Requiring --as was the c3707 refusal — the hub machine holds the
+    # admin key but no operator agent identity.
+    rt = sub.add_parser("retire", help="retire an agent (neutral decommission, "
+                                       "operator/admin); --undo restores, --list shows retired")
     rt.add_argument("agent", nargs="?", default=None, help="the agent id to retire")
+    rt.add_argument("--as", dest="as_id", default=None, metavar="AGENT_ID",
+                    help="act as this operator agent id (else the admin key is used)")
     rt.add_argument("--reason", default=None, help="neutral reason (stored, never 'banned')")
     rt.add_argument("--undo", action="store_true", help="restore a retired agent")
     rt.add_argument("--list", action="store_true", help="list retired agents (operator)")
+    rt.add_argument("--url", default=None)
+    rt.add_argument("--admin-key", dest="admin_key", default=None,
+                    help="admin key (default: $AGORA_ADMIN_KEY, then config.json)")
     rt.set_defaults(func=cmd_retire)
 
     at = _agent_parser("attachment", "message attachments: put a file / get by id")

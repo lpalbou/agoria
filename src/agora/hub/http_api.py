@@ -111,9 +111,32 @@ def register_agent(
     return {"agent": info.model_dump(), "api_key": api_key}
 
 
+def operator_or_admin(
+    token: str = Depends(bearer_token),
+    service: HubService = Depends(get_service),
+    admin_key: str = Depends(get_admin_key),
+) -> AgentInfo:
+    """Operator authority for LIFECYCLE verbs, admitted two ways: an
+    operator AGENT's bearer key, or the hub's ADMIN key (c3707 — the
+    operator ran `agora retire` from the hub machine, where the admin key
+    lives in config.json but no agent identity does, and the verb refused;
+    every sibling lifecycle verb — register, pause, rules, delegate —
+    already accepts the admin key). The admin key is an infra credential,
+    not an identity: it maps to a synthetic operator principal and never
+    posts words as anyone."""
+    if hmac.compare_digest(token, admin_key):
+        return AgentInfo(id="operator", name="operator (admin key)",
+                         operator=True)
+    try:
+        agent = service.authenticate(token)
+    except HubError as e:
+        raise HTTPException(e.status_code, e.detail) from e
+    return agent
+
+
 @router.get("/agents/retired")
 def list_retired_agents(
-    agent: AgentInfo = Depends(current_agent),
+    agent: AgentInfo = Depends(operator_or_admin),
     service: HubService = Depends(get_service),
 ) -> list[dict[str, Any]]:
     """Operator-only: enumerate retired identities so an un-retire UI can
@@ -131,12 +154,12 @@ class RetireAgent(BaseModel):
 def retire_agent(
     agent_id: str,
     payload: RetireAgent | None = None,
-    agent: AgentInfo = Depends(current_agent),
+    agent: AgentInfo = Depends(operator_or_admin),
     service: HubService = Depends(get_service),
 ) -> dict[str, Any]:
     """Retire an identity (0089): neutral decommission — auth refused
-    neutrally, evicted from rosters, id reserved forever. Operator only;
-    NOT a block (never appears in /blocks). Reversible via DELETE."""
+    neutrally, evicted from rosters, id reserved forever. Operator (agent
+    bearer or admin key); NOT a block. Reversible via DELETE."""
     return _run(service.retire_agent, agent, agent_id,
                 payload.reason if payload else "")
 
@@ -144,7 +167,7 @@ def retire_agent(
 @router.delete("/agents/{agent_id}/retire")
 def unretire_agent(
     agent_id: str,
-    agent: AgentInfo = Depends(current_agent),
+    agent: AgentInfo = Depends(operator_or_admin),
     service: HubService = Depends(get_service),
 ) -> dict[str, Any]:
     """Restore a retired identity (operator only); it rejoins rooms explicitly."""

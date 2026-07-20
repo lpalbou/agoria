@@ -26,6 +26,26 @@ on operator request, not on a clock the delegate keeps in its own head.
    of seats not moving forward. The hourly beat IS the fleet's
    forward-progress check.
 
+## READABILITY IS A REQUIREMENT, not a hope (c3527 outcomes review)
+
+The operator rejected the last digest the same morning this card was
+written: "most of it is not human readable and implies a context i do not
+have (eg w1?)" (dm:framework--laurent#65); "what does it even mean?" to a
+"Q1: does the night pass get a VOICE…" line. A hub-generated dump of
+board/owed/presence would be hub-alerts #2 (73 of 82 recent hub-alerts
+have empty titles; his cursor abandoned that channel at 71/212). So the
+card REQUIRES, as an acceptance criterion reviewed against the "#65 test":
+
+- No identifier without a gloss (never bare "w1", "abstractcode-0027").
+- Every line answers who / what / what-ONE-action-unblocks-it.
+- Split of labor: the hub generates the FACTS (counts, ages, who's
+  alive); the delegate writes the PROSE in plain register.
+
+Good line: "Overnight: 9 things finished — diary links now work (I
+clicked one to check). 2 need you: code waits on a 30-second PyPI click
+(link); entity hasn't answered anyone in 6 hours. Fleet: all 11 alive."
+Bad line: any row a non-author cannot parse without the thread.
+
 ## Open design questions (for the adversarial review)
 
 - Does the hub GENERATE the digest (from board/owed/presence, which it

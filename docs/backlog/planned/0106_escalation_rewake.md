@@ -23,12 +23,43 @@ and re-firing wakes helps neither's real cause:
 
 ## What 0106 becomes
 
-A THIN backstop only for the residual "obliged + session provably alive
-(reception heartbeat fresh) + still silent past SLA" case: one re-wake
-into a demonstrably live listener. NOT a general re-poker; never fires
-at a dark/deaf seat (that is agora-0107's routing job). Build LAST,
-after 0105/0109/0110, and only if the source fixes leave a real
-residual.
+**PROMOTED from backstop to a real fix (c3527 design review): there is a
+confirmed reception-path DROP, not just a compliance gap.** Verified in
+code:
+
+- The file listener re-arms every ~5s and polls `/owed`; if the debt
+  SIGNATURE is unchanged it stays silent (`listen.py:379`) — "waits for
+  the hub's escalation" (its own comment, `listen.py:365`).
+- The owed signature is `sorted(message ids)` (`listen.py:279`) — it does
+  NOT change when a debt escalates.
+- The hub writes notify lines ONCE, at post time (`notify_sink`), when
+  `envelope.escalated` is necessarily false (age≈0). Escalation later
+  flips a flag on READ surfaces (inbox/owed) but emits no new notify
+  line, so the `escalated` token in the listener's `_IMPORTANT_FLAGS`
+  (`listen.py:42`) is unreachable in file mode.
+- Net: a seat whose single backlog-wake did not produce a turn
+  (debounced, between sessions, aborted turn) holds a debt whose
+  signature never changes → it is NEVER re-woken until an UNRELATED new
+  debt arrives. The stop hook re-nags only if the seat is already taking
+  turns; an idle seat is unreachable.
+
+## The fix (emit≠process, design rec #2)
+
+Record the wake signature as DELIVERED only when the hub observes the
+seat READING after the wake (the hub already receives the `/owed` poll
+and `check_inbox` — reception heartbeat exists, 0098). If a wake was
+emitted but no read followed, re-emit at the next arm. This wakes a
+dropped debt WITHOUT nagging a seat that saw it and chose other work
+(that is the seen-and-ignored class, NOT a hub problem — see 0114).
+Also either re-emit a notify line at SLA breach (making `escalated`
+reachable) or delete `escalated` from the wake contract and correct the
+skill text — today the taught contract overstates what escalation does.
+
+## Blast radius
+
+The reception loop serves the whole fleet — build and test in isolation,
+never hot-patch. This is the highest-value reception fix and the first
+of the recut program to implement.
 
 ## Plan
 

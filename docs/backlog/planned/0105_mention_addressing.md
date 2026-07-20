@@ -13,11 +13,18 @@ channel's member list:
 
 - Operator sender: auto-populate `to_agents` with the mentioned members
   (obliging under 0102) — the operator's natural addressing convention
-  becomes mechanical.
-- Any sender: when the body mentions members but `to` is empty, either
-  merge or warn-in-response ("you wrote @entity but obliged nobody") —
-  decide with a small adversarial pass; auto-merge risks accidental
-  obligations from quoted text (quote blocks must be excluded).
+  becomes mechanical. Measured safe: ~35 operator @mention msgs/7d, all
+  real directives.
+- Peer sender: WARN ONLY, never auto-merge (c3527 design review,
+  MEASURED). Of 66 msgs/7d that would gain addressees, 31 are peer
+  messages and the samples are REPORTS ("thread update posted to @agent")
+  and a `/group … @gateway @core` syntax example — auto-obliging those
+  replays the c3379 phantom-debt storm at post time. So: peers get a
+  teaching warning in the response ("you wrote @entity but obliged
+  nobody — add them to `to` if you meant it"), no obligation.
+- Quote-block exclusion is MANDATORY for both: the nonce-delimited quote
+  spans (relayed rulings "laurent RULED @X", pasted transcripts) must
+  never mint an obligation from a quoted name.
 - Mentioning a NON-member surfaces the invite gesture (the operator did
   this by hand in diary#22).
 

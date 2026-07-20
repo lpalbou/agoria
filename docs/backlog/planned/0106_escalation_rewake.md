@@ -1,10 +1,34 @@
-# agora-0106 — escalation with teeth: overdue debts re-fire wakes
+# agora-0106 — escalation re-wake (DEMOTED to a backstop; root-cause first)
 
-- **Origin**: 10h communication audit (2026-07-20). Seats with ARMED
-  listeners slept 7.4-7.6h on operator directives (dm:agora--laurent#32,
-  dm:code--laurent#55): the debt existed in `/owed` and the envelope
-  escalated, but escalation is a ledger flag — nothing re-fired the
-  seat's wake after the first delivery.
+- **Origin**: 10h communication audit (2026-07-20), then operator ruling
+  dm:agora--laurent#42: "this should not need escalation, identify the
+  root problem on why the agent didn't respond and comply."
+
+## Ruling: escalation is the WRONG primary fix
+
+Root-cause analysis split the overnight non-response into two classes,
+and re-firing wakes helps neither's real cause:
+
+- **Class A — session/machine death (the 01:40-07:00 hole).** The DB
+  shows 3 messages + 2 reads in 5.3h; reads zero at 02/04/05/06; powerd
+  scheduled low-power ~02:18; listener loops resumed only ~08:24. The
+  agent PROCESSES were gone. A wake fired at a dead session does
+  nothing. Real fix: agora-0110 (fleet-liveness alarm) + the operator's
+  infra decision (headless/daemon seats vs interactive tabs that die).
+- **Class B — live-but-unobliged (daytime, code#55 = 7.4h).** The
+  session existed but the message never registered as a must-do: plain
+  reply/fyi, or to=[], or buried in a wall. Fixed AT THE SOURCE:
+  DM auto-address (0.12.14), operator/addressed replies oblige
+  (0.12.18/19), @mention parsing (0105). That is the compliance fix.
+
+## What 0106 becomes
+
+A THIN backstop only for the residual "obliged + session provably alive
+(reception heartbeat fresh) + still silent past SLA" case: one re-wake
+into a demonstrably live listener. NOT a general re-poker; never fires
+at a dark/deaf seat (that is agora-0107's routing job). Build LAST,
+after 0105/0109/0110, and only if the source fixes leave a real
+residual.
 
 ## Plan
 

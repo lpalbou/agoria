@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.12.26 — 2026-07-21
+
+**Desk ask rows get a meaningful label when the sender omitted a title
+(c3866).** DM asks routinely carry no `title` (the operator's own asks
+included), and the desk showed them as "(untitled ask)" — unreadable on
+the one surface meant to answer "what waits on me". The row label now
+falls back to the first pending ask's text, then a body snippet, before
+that placeholder.
+
 ## 0.12.25 — 2026-07-21
 
 **The operator desk: everything waiting on the human, derived at read

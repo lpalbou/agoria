@@ -2723,10 +2723,23 @@ class HubService:
         for op in operators:
             info = AgentInfo(id=op, name=op, operator=True)
             for o in self.owed(info)["to_answer"]:
+                # A meaningful label even when the sender set no title (DM
+                # asks routinely omit it): title, else the first pending
+                # ask's text, else a body snippet — never a bare
+                # "(untitled)" on the surface the operator reads first.
+                what = o["title"]
+                if not what:
+                    msg = self.db.get_message(o["id"])
+                    if msg is not None:
+                        pend = set(o.get("pending_asks") or [])
+                        ask_texts = [str(a.get("text", "")) for a in asks_of(msg)
+                                     if str(a.get("id")) in pend and a.get("text")]
+                        what = (ask_texts[0] if ask_texts
+                                else (msg.body or "").strip()[:80])
                 rows.append({
                     "kind": "ask", "operator": op,
                     "channel": o["channel"], "seq": o["seq"], "id": o["id"],
-                    "what": o["title"] or "(untitled ask)",
+                    "what": what or "(untitled ask)",
                     "who_waits": o["from"],
                     "age_minutes": o["age_minutes"],
                     "one_action": "answer it (or decline on the record)",

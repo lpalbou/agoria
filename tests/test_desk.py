@@ -73,6 +73,24 @@ def test_desk_derives_asks_waiting_on_the_operator_and_clears_on_engagement():
     assert not [r for r in desk["rows"] if r["kind"] == "ask"]
 
 
+def test_desk_ask_label_falls_back_to_ask_text_when_titleless():
+    """DM asks routinely omit a title; the desk must never show a bare
+    '(untitled)' on the surface the operator reads first — fall back to the
+    pending ask's text (c3866: laurent's own ask arrived titleless)."""
+    client = make_client()
+    op = register(client, "op", operator=True)
+    flow = register(client, "flow")
+    make_channel(client, flow, "room", op)
+    client.post("/channels/room/messages", headers=flow,
+                json={"body": "b", "status": "open", "to": ["op"],
+                      "asks": [{"id": "1", "text": "ship it or hold?",
+                                "to": ["op"]}]})
+    desk = client.get("/desk", headers=op).json()
+    labels = [r["what"] for r in desk["rows"] if r["kind"] == "ask"]
+    assert "ship it or hold?" in labels
+    assert "(untitled ask)" not in labels
+
+
 def test_done_when_vocabulary_validated_at_write_time():
     client = make_client()
     op = register(client, "op", operator=True)

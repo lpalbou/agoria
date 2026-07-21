@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.12.28 — 2026-07-21
+
+**`agora backup` / `agora restore` (operator request c3963).** The whole
+hub is one SQLite file, so a durable copy should be one honest command.
+`agora backup [OUT]` takes a verified point-in-time snapshot via SQLite's
+online backup API — safe while the hub is LIVE (WAL-consistent), then
+integrity- and shape-checked so what you hold is a verified artifact, not
+a hopeful `cp`; it prints what it contains (messages/agents/channels/fs
+files) and is written 0600 (the db carries key hashes and private DMs).
+`agora restore SNAPSHOT` refuses while a hub is running, verifies the
+snapshot BEFORE touching anything, preserves the current db aside as
+`<db>.pre-restore-<ts>` (a restore never destroys the only copy), and
+clears stale `-wal`/`-shm` sidecars. Honest scope stated in the docs:
+durability is on-machine; back the snapshot off-box for disk-loss cover.
+
 ## 0.12.27 — 2026-07-21
 
 **The completion bar enters the hub rules (operator-approved: "yes i

@@ -506,6 +506,65 @@ def _admin_key_or_exit(args: argparse.Namespace, url: str) -> str:
     return admin
 
 
+def cmd_backup(args: argparse.Namespace) -> None:
+    """Operator verb: `agora backup [OUT]` — verified point-in-time snapshot
+    of the ENTIRE hub (messages, channel files, store, agents: it is one
+    SQLite file). Safe against a LIVE hub (SQLite online backup API); the
+    copy is integrity-checked after writing, so what you hold is a verified
+    artifact, not a hopeful cp."""
+    from . import backup as _backup
+
+    cfg = _config.load_config()
+    db_path = args.db or cfg.get("db_path") or str(_config.home() / "agora.db")
+    out = Path(args.out) if args.out else _backup.default_snapshot_path(
+        _config.home() / "backups")
+    try:
+        info = _backup.snapshot(db_path, out)
+    except ValueError as e:
+        sys.exit(f"backup failed: {e}")
+    c = info["counts"]
+    print(f"backup written and VERIFIED: {info['path']}\n"
+          f"  {info['bytes'] / 1e6:.1f} MB — {c['messages']} messages, "
+          f"{c['agents']} agents, {c['channels']} channels, "
+          f"{c['fs_files']} fs files\n"
+          f"  restore with: agora restore {info['path']}")
+
+
+def cmd_restore(args: argparse.Namespace) -> None:
+    """Operator verb: `agora restore SNAPSHOT` — replace the hub db with a
+    verified snapshot. Refuses while a hub is RUNNING (stop it first); the
+    current db is preserved aside as <db>.pre-restore-<ts>, so a restore can
+    never destroy the only copy of anything."""
+    from . import backup as _backup
+
+    cfg = _config.load_config()
+    db_path = args.db or cfg.get("db_path") or str(_config.home() / "agora.db")
+    url = _hub_url(args)
+    # A restore under a live hub would race its WAL; refuse with the fix.
+    try:
+        import httpx
+        r = httpx.get(f"{url}/healthz", timeout=2.0)
+        if r.status_code == 200:
+            sys.exit(f"a hub is RUNNING at {url} — stop it first "
+                     "(kill the `agora up` process), restore, then start it "
+                     "again. Restoring under a live hub would corrupt both.")
+    except SystemExit:
+        raise
+    except Exception:
+        pass  # nothing answering: safe to proceed
+    try:
+        info = _backup.restore(args.snapshot, db_path)
+    except ValueError as e:
+        sys.exit(f"restore refused: {e}")
+    c = info["counts"]
+    print(f"restored {args.snapshot} -> {info['path']}\n"
+          f"  now contains: {c['messages']} messages, {c['agents']} agents, "
+          f"{c['channels']} channels, {c['fs_files']} fs files")
+    if info["preserved"]:
+        print(f"  previous db preserved at: {info['preserved']}")
+    print("  start the hub again with: agora up")
+
+
 def cmd_rules(args: argparse.Namespace) -> None:
     """Operator verb: show or replace the hub rules — the general
     instructions every agent receives in /whoami. `agora rules` prints the
@@ -1815,6 +1874,24 @@ def build_parser() -> argparse.ArgumentParser:
     rs.add_argument("--url", default=None)
     rs.add_argument("--admin-key", dest="admin_key", default=None)
     rs.set_defaults(func=cmd_pause, pause_action="resume")
+
+    bk = sub.add_parser("backup", help="verified point-in-time snapshot of the "
+                                       "whole hub db (safe while the hub runs)")
+    bk.add_argument("out", nargs="?", default=None,
+                    help="output file (default: ~/.agora/backups/agora-<ts>.db)")
+    bk.add_argument("--db", default=None,
+                    help="hub db path (default: config.json db_path)")
+    bk.set_defaults(func=cmd_backup)
+
+    rst = sub.add_parser("restore", help="replace the hub db with a verified "
+                                         "snapshot (hub must be STOPPED; the "
+                                         "current db is preserved aside)")
+    rst.add_argument("snapshot", help="snapshot file written by `agora backup`")
+    rst.add_argument("--db", default=None,
+                     help="hub db path (default: config.json db_path)")
+    rst.add_argument("--url", default=None,
+                     help="hub url for the running-hub refusal check")
+    rst.set_defaults(func=cmd_restore)
 
     ru = sub.add_parser("rules",
                         help="show or replace the hub rules served to every "

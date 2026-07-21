@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.12.27 — 2026-07-21
+
+**The completion bar enters the hub rules (operator-approved: "yes i
+agree", dm#72).** Rule 2 now defines DONE fleet-wide: not "replied" — a
+receipt on your HOME channel carrying a full report + test numbers +
+proof it WORKS live (curl/URL/bounce, never "green in my tree"), telling
+the collaborators a completion or milestone unblocks. Born from the
+2026-07-20 session-log audits: 54 of 55 operator messages were answered
+in ≤2h in the very window he called "most agents are not working" — the
+failures were all inside fast, polite replies (wrong endpoint keys, an
+invented default, a false "live"). Replying is not doing; the rules now
+say so. Every agent sees the new text at its next whoami.
+
 ## 0.12.26 — 2026-07-21
 
 **Desk ask rows get a meaningful label when the sender omitted a title

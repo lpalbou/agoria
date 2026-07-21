@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.12.30 — 2026-07-21
+
+**The parity spine (agora-0118, operator order dm#99): clients stop
+re-deriving hub state.** Python/web parity comes from the hub, not from
+synchronized client code — this release moves the drift surfaces into the
+served contract:
+
+- **Typed responses.** `/owed` serves `OwedReport` (ObligationRow/
+  ConsumeRow/WaitingRow/OwedCounts + `computed_at`), `/inbox` serves
+  `Envelope`s, history pages serve `MessageRow`s — so the served
+  `/openapi.json` states exact shapes where it used to say
+  `additionalProperties: true`. Wire-compatible: every 0.12.29 key is
+  still emitted; obligation rows now carry canonical `sender` (+
+  `created_at`), with the old `from` key kept as a deprecated alias
+  until the agora/0.4 bump.
+- **OpenAPI release artifact.** `scripts/export_openapi.py` writes a
+  committed `openapi.json`; CI fails when it goes stale. TS clients
+  generate their types from the artifact (`openapi-typescript`) and
+  delete hand-kept shapes.
+- **Served decorations.** History rows carry `pending_asks` +
+  `has_resolved_reply` from the same discharge logic as `/owed` (one
+  batched reply query per page), and `GET
+  /channels/{c}/messages/by-seq/{seq}` resolves '#N' directly. Chat's
+  `/read`/`/reply`/`/tally` ride them; the digest-page probe and
+  history-probe re-derivations are gone.
+- **Capability ledger.** `/whoami` now serves `semantics` (e.g.
+  `owed-typed`, `messages-by-seq`, `groups-composite`): clients
+  feature-detect instead of parsing version strings, and behavioral
+  changes get a NAME the moment they ship (the unnamed 0102 semantics
+  change is the incident this closes).
+- **Golden conformance vectors.** `tests/vectors/*.json` pin the
+  behavioral contract (binary obligations, per-ask discharge, 0102
+  addressed-reply debts, the groups composite) as language-independent
+  HTTP replay fixtures; `tests/test_golden_vectors.py` is the reference
+  runner, and any client proves parity by replaying the same files. A
+  vector-expectation change is a wire-contract change: version bump +
+  semantics entry, enforced by review.
+
 ## 0.12.29 — 2026-07-21
 
 **`POST /groups` — the focused-room composite is now a hub operation

@@ -383,11 +383,28 @@ class ChatApp:
             return None
         if not local.isdigit():
             return channel, local, ask_ids  # a ULID: already a unique id
-        rows = await self.client.history(channel, since=int(local) - 1, limit=1)
-        if rows and rows[0].seq == int(local):
-            return channel, rows[0].id, ask_ids
-        self._print(f"no message {local} in {channel}")
-        return None
+        # Positional resolve is the hub's job (agora-0118 move 2): one
+        # purpose-built call instead of the history-page probe every client
+        # used to script its own way. FALL BACK to the probe when the call
+        # fails (impl adversary P1-1a: a pre-0.12.30 hub 404s the route, and
+        # "no message N" about a message that exists is a false statement) —
+        # only a clean miss on BOTH paths reads as absence, and a transport
+        # failure names itself instead of masquerading as one (P2-3).
+        try:
+            row = await self.client.message_by_seq(channel, int(local))
+            return channel, row.id, ask_ids
+        except Exception:
+            try:
+                rows = await self.client.history(channel,
+                                                 since=int(local) - 1, limit=1)
+            except Exception as exc:
+                self._print(self.style.red(
+                    f"cannot resolve {local}@{channel}: {exc}"))
+                return None
+            if rows and rows[0].seq == int(local):
+                return channel, rows[0].id, ask_ids
+            self._print(f"no message {local} in {channel}")
+            return None
 
     # -- commands ---------------------------------------------------------------
 
@@ -682,23 +699,20 @@ class ChatApp:
                         f"{s.dim(about[:80])}")
 
     async def _pending_ask_ids(self, channel: str, target: Any) -> list[str] | None:
-        """Which of `target`'s asks are still unanswered, from the channel
-        digest — discharge is computed hub-side from the replies, which a
-        single message fetch cannot see. None = unknown (digest unavailable):
-        the renderer then shows neutral marks, it never guesses. A question
-        absent from the digest's open list has been discharged or resolved,
-        so 'absent' safely reads as 'nothing pending'."""
+        """Which of `target`'s asks are still unanswered — SERVED by the hub
+        (agora-0118 move 2: by-seq rows carry pending_asks from the same
+        discharge logic as /owed), replacing the digest-page probe this
+        method used to script. None = unknown (fetch failed): the renderer
+        shows neutral marks, it never guesses."""
         if not asks_from(target.data):
             return None
         try:
-            d = self.client._json(await self.client._http.get(
-                f"/channels/{channel}/digest"))
+            row = await self.client.message_by_seq(channel, target.seq)
+            if row.pending_asks is None:
+                return None  # hub made no statement (retracted / older hub)
+            return [str(a) for a in row.pending_asks]
         except Exception:
             return None
-        for q in d.get("open_questions", []):
-            if q.get("seq") == target.seq:
-                return [str(a["id"]) for a in q.get("pending_asks", [])]
-        return []
 
     async def cmd_delegate(self, arg: str) -> None:
         """Operator: `/delegate AGENT --power reporting,operational [--ttl 7d]`
@@ -1086,34 +1100,38 @@ class ChatApp:
         except Exception as exc:
             self._print(s.red(f"owed failed (hub too old?): {exc}"))
             return
-        ta, tc, wo = owed["to_answer"], owed["to_consume"], owed.get("waiting_on", [])
+        # Typed consumption (agora-0118): the reference client renders the
+        # canonical `sender` field — never the deprecated `from` alias whose
+        # removal the 0.4 bump carries.
+        ta, tc, wo = owed.to_answer, owed.to_consume, owed.waiting_on
         if not (ta or tc or wo):
             self._print(s.dim("nothing owed, nothing waiting — clean slate"))
             return
         if ta:
             self._print(s.bold("TO ANSWER (yours until you reply):"))
             for r in ta:
-                esc = s.red(" ESCALATED") if r.get("escalated") else ""
-                naming = (f" naming you: {','.join(r['asks_naming_you'])}"
-                          if r.get("asks_naming_you") else "")
-                self._print(f"  {safe(r['channel'])}#{r['seq']} from "
-                            f"{s.sender(safe(r['from']))} — pending "
-                            f"{r['pending_asks']}{naming} · {fmt_age(r['age_minutes'])}"
-                            f"{esc} · /read {r['seq']}@{safe(r['channel'])}")
+                esc = s.red(" ESCALATED") if r.escalated else ""
+                naming = (f" naming you: {','.join(r.asks_naming_you)}"
+                          if r.asks_naming_you else "")
+                self._print(f"  {safe(r.channel)}#{r.seq} from "
+                            f"{s.sender(safe(r.sender))} — pending "
+                            f"{r.pending_asks}{naming} · {fmt_age(r.age_minutes)}"
+                            f"{esc} · /read {r.seq}@{safe(r.channel)}")
         if tc:
             self._print(s.bold("TO CONSUME (answers to YOUR asks — read and use):"))
             for r in tc:
-                self._print(f"  {safe(r['channel'])}#{r['answer_seq']} "
-                            f"{s.sender(safe(r['answered_by']))} answered your ask "
-                            f"{r['your_asks']} · {fmt_age(r['age_minutes'])} · "
-                            f"/read {r['answer_seq']}@{safe(r['channel'])}")
+                self._print(f"  {safe(r.channel)}#{r.answer_seq} "
+                            f"{s.sender(safe(r.answered_by))} answered your ask "
+                            f"{r.your_asks} · {fmt_age(r.age_minutes)} · "
+                            f"/read {r.answer_seq}@{safe(r.channel)}")
         if wo:
             self._print(s.bold("WAITING ON (your open asks, per seat):"))
             for r in wo:
-                state = ("served, silent — nudge?" if r["state"] == "acked-past-no-reply"
+                state = ("served, silent — nudge?" if r.state == "acked-past-no-reply"
+                         else "retired — close or re-aim the ask" if r.state == "retired"
                          else "not served yet (offline/behind)")
-                self._print(f"  {safe(r['channel'])}#{r['seq']} ask {r['ask']} -> "
-                            f"{s.sender(safe(r['seat']))}: {state}")
+                self._print(f"  {safe(r.channel)}#{r.seq} ask {r.ask} -> "
+                            f"{s.sender(safe(r.seat))}: {state}")
 
     async def cmd_board(self) -> None:
         """The operator's follow-the-work table (done / pending / ongoing /
@@ -1317,6 +1335,17 @@ class ChatApp:
             ver_s = s.dim(hub_label) + proto_s + s.dim(")")
         else:
             ver_s = s.dim(f"  hub v{ver} ({proto})") if ver else ""
+        # Capability ledger (agora-0118): the first-party client FEATURE-
+        # DETECTS from whoami.semantics rather than parsing version numbers —
+        # the consumer that keeps the ledger honest. A hub serving NO ledger
+        # lacks everything this client depends on, which is exactly when the
+        # warning matters most (impl adversary P2-1: gating on `served`
+        # silenced the one hub that needed the line).
+        from . import PROTOCOL_SEMANTICS
+        served = me.get("semantics") or []
+        missing = [x for x in PROTOCOL_SEMANTICS if x not in served]
+        if missing:
+            ver_s += s.yellow(f"  hub lacks: {', '.join(missing[:4])}")
         self._print(f" {s.bold('agora chat')} — {s.sender(self.me)}{role}{ver_s}")
         self._print(s.cyan("═" * width))
         self._print(_render_channel_table(

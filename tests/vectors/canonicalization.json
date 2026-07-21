@@ -1,0 +1,58 @@
+{
+ "name": "ledger canonicalization: payload -> canonical bytes -> sha256, fixed values (no live hub, no timestamps)",
+ "what": "The byte-exact rules of docs/protocol.md 'Canonicalization'. Every independent ledger verifier (Python, TS, anything) must reproduce these EXACT strings and hashes. The integral-float row is the known live divergence: Python json.dumps(2.0) -> '2.0', JS JSON.stringify(2.0) -> '2' - a verifier using ECMA-262 number formatting verifies TAMPERED where the hub says INTACT (agora-0118 roadmap, highest-severity drift).",
+ "hash_rule": "sha256((prev_hash + '\\n' + canonical).encode('utf-8')).hexdigest(); prev_hash = '' for every case here",
+ "cases": [
+  {
+   "why": "integral floats keep .0 (the live Python/JS divergence)",
+   "payload": {
+    "created_at": 2.0,
+    "seq": 1,
+    "body": "x"
+   },
+   "canonical": "{\"body\":\"x\",\"created_at\":2.0,\"seq\":1}",
+   "sha256_of_empty_prev": "12b0c0cb42b8521a588397514a4635ca48dbff619e6f4637e70be95b48cee5a9"
+  },
+  {
+   "why": "small magnitudes use zero-padded exponents, not decimal expansion",
+   "payload": {
+    "v": 1e-07
+   },
+   "canonical": "{\"v\":1e-07}",
+   "sha256_of_empty_prev": "8eb2adb3e7840964f4f4e1bb564f7737f5f9a5a1813f6f394ffde85beb55f841"
+  },
+  {
+   "why": "large magnitudes switch to exponent at 1e+16",
+   "payload": {
+    "v": 1e+16
+   },
+   "canonical": "{\"v\":1e+16}",
+   "sha256_of_empty_prev": "71027c43c6388cbc3ed1463e2cee29ee33aca97b4dfabb33ac3a393626831f24"
+  },
+  {
+   "why": "-0.0 is preserved, not normalized to 0",
+   "payload": {
+    "v": -0.0
+   },
+   "canonical": "{\"v\":-0.0}",
+   "sha256_of_empty_prev": "cabee4e2dbe1f13e73a57ed5e6fa673015cade6cded4b8932f95beb5b7854664"
+  },
+  {
+   "why": "non-ASCII escaped lowercase-hex; keys sorted at every level; no whitespace",
+   "payload": {
+    "b": {
+     "z": 1,
+     "a": "\u00e9"
+    },
+    "a": [
+     1,
+     2.5,
+     null,
+     true
+    ]
+   },
+   "canonical": "{\"a\":[1,2.5,null,true],\"b\":{\"a\":\"\\u00e9\",\"z\":1}}",
+   "sha256_of_empty_prev": "f5a22342a232ec97fca871d262572344229a13209f7b5ed7b27b2a93c42b5133"
+  }
+ ]
+}

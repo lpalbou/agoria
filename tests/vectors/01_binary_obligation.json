@@ -1,0 +1,36 @@
+{
+  "name": "binary open obligation: addressed seat owes until ANY reply of theirs; asker then owes consumption",
+  "setup": [
+    {"op": "register", "id": "alice"},
+    {"op": "register", "id": "bob"},
+    {"op": "channel", "name": "room", "owner": "alice", "members": ["bob"]},
+    {"op": "post", "as": "alice", "channel": "room", "ref": "q",
+     "body": "bob, can you take the deploy?", "title": "deploy?",
+     "status": "open", "to": ["bob"]}
+  ],
+  "expect": [
+    {"call": "owed", "as": "bob", "match": {
+      "to_answer": [{"channel": "room", "seq": "$q.seq", "sender": "alice",
+                     "from": "alice", "title": "deploy?", "pending_asks": [],
+                     "escalated": false}],
+      "to_consume": [],
+      "counts": {"to_answer": 1, "to_consume": 0}}},
+    {"call": "messages", "as": "bob", "channel": "room", "since": 1, "match": [
+      {"seq": "$q.seq", "sender": "alice", "status": "open",
+       "pending_asks": [], "has_resolved_reply": false}]},
+
+    {"op": "post", "as": "bob", "channel": "room", "ref": "a",
+     "body": "yes, taking it", "status": "reply", "reply_to": "$q.id"},
+
+    {"call": "owed", "as": "bob", "match": {
+      "to_answer": [], "counts": {"to_answer": 0}}},
+    {"call": "owed", "as": "alice", "match": {
+      "to_consume": [{"channel": "room", "seq": "$q.seq",
+                      "answered_by": "bob", "answer_seq": "$a.seq"}],
+      "counts": {"to_consume": 1}}},
+
+    {"op": "read", "as": "alice", "channel": "room", "id": "$a.id"},
+    {"call": "owed", "as": "alice", "match": {
+      "to_consume": [], "counts": {"to_consume": 0}}}
+  ]
+}

@@ -31,6 +31,40 @@ the current hub and the protocol string never warned it.
    pass (fold in whatever the SDK/helpers tidy-up surfaces).
 4. Refresh docs/protocol.md's version + the additive/breaking ledger.
 
+## Coupled-edit inventory for the deprecation removals (write-down from the
+## 0121 design adversary, P2-6 — discovering this list DURING the bump is
+## how half-removals happen)
+
+Removing the `from` alias and `age_minutes` at 0.4 requires simultaneous
+edits to ALL of:
+
+- `src/agora/models.py`: `ObligationRow.from_` computed field (+ its
+  `validation_alias=AliasChoices("sender", "from")` — decide whether old-hub
+  parse compat is still wanted), `age_minutes` on ObligationRow/ConsumeRow.
+- `tests/vectors/01_binary_obligation.json`: pins `"from": "alice"` — the
+  expectation must flip to sender-only (this is a wire-contract change: the
+  vector diff IS the bump's proof).
+- `tests/test_openapi_artifact.py`: asserts `"from" in row` +
+  `deprecated: true` markers — flip to `assert "from" not in row`.
+- `src/agora/chat.py` / `src/agora/cli.py`: already render `sender` (done in
+  0121); re-grep for stragglers.
+- STILL-UNTYPED dict surfaces that emit `"from"`: board rows, digest
+  `open_questions`, desk rows (`service.py` — grep `"from":`). These are
+  invisible to BOTH tripwires (not in the artifact, not in any vector);
+  they must be typed or hand-audited in the same pass.
+- `PROTOCOL_SEMANTICS`: fold stable entries into the 0.4 version meaning —
+  and per governance, entries are NEVER removed within a wire version, only
+  folded at bumps with the fold list in the CHANGELOG (clients may key on
+  the strings).
+- `whoami.semantics` consumers (chat login banner) and continuum's
+  generated types: regenerate from the 0.4 artifact.
+
+Also unify `pending_asks` element types across surfaces at the bump
+(design adversary P1-5): rows serve `list[str]` (ask ids); the digest's
+`open_questions[].pending_asks` serves `list[{id, text, to}]` — same name,
+different shape. Rename the digest field (e.g. `pending_ask_details`) or
+convert it to ids at 0.4.
+
 ## Sequencing
 
 Blocked on the protocol/SDK/helpers roadmap (the reusability + security +

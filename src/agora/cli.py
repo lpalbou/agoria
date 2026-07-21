@@ -1120,20 +1120,22 @@ def cmd_inbox(args):
             owed = await c.owed()
         except Exception:
             owed = None  # pre-0.10 hub: no /owed yet
-        if owed and (owed["counts"]["to_answer"] or owed["counts"]["to_consume"]):
+        if owed and (owed.counts.to_answer or owed.counts.to_consume):
+            # Typed consumption (agora-0118): canonical `sender`, never the
+            # deprecated `from` alias the 0.4 bump removes.
             print("YOU OWE (ack clears none of this):")
-            for row in owed["to_answer"][:10]:
-                naming = (f" asks naming you: {row['asks_naming_you']}"
-                          if row.get("asks_naming_you") else "")
-                esc = ", ESCALATED" if row.get("escalated") else ""
-                print(f"- ANSWER {row['channel']}#{row['seq']} from {row['from']}"
-                      f" (pending {row['pending_asks']},{naming}"
-                      f" {row['age_minutes']}m{esc}) — read id={row['id']},"
+            for row in owed.to_answer[:10]:
+                naming = (f" asks naming you: {row.asks_naming_you}"
+                          if row.asks_naming_you else "")
+                esc = ", ESCALATED" if row.escalated else ""
+                print(f"- ANSWER {row.channel}#{row.seq} from {row.sender}"
+                      f" (pending {row.pending_asks},{naming}"
+                      f" {row.age_minutes}m{esc}) — read id={row.id},"
                       " reply with answers=[...], DO or claim assigned work")
-            for row in owed["to_consume"][:10]:
-                print(f"- CONSUME {row['channel']}#{row['answer_seq']}:"
-                      f" {row['answered_by']} answered YOUR ask {row['your_asks']}"
-                      f" ({row['age_minutes']}m ago) — read id={row['answer_id']}"
+            for row in owed.to_consume[:10]:
+                print(f"- CONSUME {row.channel}#{row.answer_seq}:"
+                      f" {row.answered_by} answered YOUR ask {row.your_asks}"
+                      f" ({row.age_minutes}m ago) — read id={row.answer_id}"
                       " and use it, or close your thread")
             print()
         envs = await c.check_inbox(wait=a.wait)

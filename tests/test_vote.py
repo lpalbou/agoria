@@ -177,6 +177,11 @@ def _wire(app, vote, channel_replies, dm_pages, members=None, presence=()):
             return channel_replies if since == vote.seq else []
         return dm_pages.get(channel, []) if since == 0 else []
 
+    async def message_by_seq(channel, seq):
+        # The by-seq resolve _locate rides now (agora-0118 move 2).
+        assert channel == "commons" and seq == vote.seq
+        return vote
+
     async def read(channel, mid):
         assert (channel, mid) == ("commons", vote.id)
         return [vote]
@@ -191,6 +196,7 @@ def _wire(app, vote, channel_replies, dm_pages, members=None, presence=()):
 
     app.client.list_channels = list_channels
     app.client.history = history
+    app.client.message_by_seq = message_by_seq
     app.client.read = read
     app.client.channel_info = channel_info
     app.client._http = FakeHTTP()
@@ -617,12 +623,12 @@ def test_cmd_tally_rejects_non_vote_messages():
     plain = Message(id="01HPLAIN", channel="commons", seq=5,
                     sender="hub", body="hello")
 
-    async def history(channel, since=0, limit=200):
-        return [plain]
+    async def message_by_seq(channel, seq):
+        return plain
 
     async def read(channel, mid):
         return [plain]
-    app.client.history = history
+    app.client.message_by_seq = message_by_seq
     app.client.read = read
     out: list[str] = []
     app._print = lambda text="": out.append(text)

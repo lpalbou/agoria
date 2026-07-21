@@ -25,7 +25,7 @@ import time
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field, computed_field
 
 MAX_BODY_BYTES = 64 * 1024
 MAX_DATA_BYTES = 64 * 1024     # structured payload cap (mirrors body; prevents DB-fill DoS)
@@ -270,6 +270,140 @@ class Envelope(BaseModel):
     signature: str | None = None         # sender-supplied opaque token (echoed)
     verified_by: str | None = None       # hub/gateway attestation (reserved; None today)
     created_at: float = 0.0
+
+
+class MessageRow(Message):
+    """A history-page row (`GET /channels/{c}/messages`): the immutable
+    Message plus the two thread-derived facts every client was re-deriving
+    from its own reply scans (parity move 2, agora-0118). The hub already
+    computes both for envelopes and digests; serving them here deletes
+    continuum's `replied_ids` walk and chat's `_pending_ask_ids`.
+
+    Both decorations are OPTIONAL with null meaning "the hub made no
+    statement" (adversary P2-3/P2-5): a retracted tombstone carries no
+    thread state, and a new client parsing an OLD hub's rows must be able
+    to represent "not served" instead of misreading absence as "nothing
+    pending". Non-retracted rows from a current hub always carry values."""
+
+    pending_asks: list[str] | None = None
+    # ^ ask ids still undischarged (empty list = question fully settled;
+    #   null = no statement: retracted row, or a pre-0.12.30 hub).
+    has_resolved_reply: bool | None = None
+    # ^ an authoritative closure exists downthread — render the thread as
+    #   settled without fetching the replies. Null = no statement.
+
+
+class ObligationRow(BaseModel):
+    """ONE row shape for 'this message waits on a seat' (parity move 3,
+    agora-0118): /owed.to_answer today, board/desk/digest surfaces as they
+    migrate. Field notes:
+
+    - `sender`, not `from`: the envelope/Message field name, ending the
+      one-surface alias every TS client had to special-case. The wire still
+      emits `from` too (computed, deprecated) until the agora/0.4 bump.
+    - `created_at` (truth) rides beside `age_minutes` (pre-rounded
+      convenience, deprecated at 0.4) so clients can compute their own ages
+      against the report's `computed_at`.
+    """
+
+    model_config = {"populate_by_name": True}
+
+    channel: str
+    id: str
+    seq: int
+    sender: str = Field(validation_alias=AliasChoices("sender", "from"))
+    # ^ validation accepts the legacy `from` key too (impl adversary P1-1b):
+    #   a 0.12.30+ client pointed at a pre-0.12.30 hub must still parse the
+    #   owed report — the anti-lurk banner silently vanishing on old hubs is
+    #   exactly the failure the typed client must not introduce.
+    title: str = ""
+    pending_asks: list[str] = Field(default_factory=list)
+    asks_naming_you: list[str] = Field(default_factory=list)
+    created_at: float = 0.0
+    age_minutes: float = Field(default=0.0,
+                               json_schema_extra={"deprecated": True})
+    # ^ DEPRECATED at agora/0.4: derive from created_at vs computed_at. The
+    #   SCHEMA marker matters (design adversary P1-2): generated TS types
+    #   carry @deprecated JSDoc, steering new consumers off before the
+    #   removal. json_schema_extra, NOT Field(deprecated=): the pydantic
+    #   flag warns on every access, spamming the hub's own serve path
+    #   (impl adversary P2-6) — the marker belongs on the wire contract,
+    #   not on runtime reads.
+    escalated: bool = False
+
+    @computed_field(alias="from",  # type: ignore[prop-decorator]
+                    json_schema_extra={"deprecated": True})
+    @property
+    def from_(self) -> str:
+        """DEPRECATED wire alias of `sender`; removed at agora/0.4."""
+        return self.sender
+
+
+class ConsumeRow(BaseModel):
+    """An answer to YOUR OWN open question that you have not used (0078)."""
+
+    channel: str
+    id: str
+    seq: int
+    title: str = ""
+    your_asks: list[str] = Field(default_factory=list)
+    answered_by: str
+    answer_id: str
+    answer_seq: int
+    age_minutes: float = Field(default=0.0,
+                               json_schema_extra={"deprecated": True})
+    # ^ DEPRECATED at agora/0.4 (see ObligationRow: schema-marked so
+    #   generated types warn new consumers off, without runtime warnings).
+
+
+class WaitingRow(BaseModel):
+    """Asker-side wait state for one still-pending ask addressee."""
+
+    channel: str
+    seq: int
+    ask: str
+    seat: str
+    state: str  # "not-yet-acked" | "acked-past-no-reply" | "retired"
+
+
+class OwedCounts(BaseModel):
+    to_answer: int = 0
+    to_consume: int = 0
+
+
+class OwedReport(BaseModel):
+    """The `/owed` response, typed (parity move 1, agora-0118): the served
+    OpenAPI now states this shape instead of `additionalProperties: true`,
+    so TS clients generate their types from the artifact instead of
+    hand-keeping shapes that drift."""
+
+    to_answer: list[ObligationRow] = Field(default_factory=list)
+    to_consume: list[ConsumeRow] = Field(default_factory=list)
+    waiting_on: list[WaitingRow] = Field(default_factory=list)
+    counts: OwedCounts = Field(default_factory=OwedCounts)
+    computed_at: float = 0.0
+
+
+class WhoamiReport(BaseModel):
+    """The `/whoami` response, typed (parity move 1, agora-0118). The
+    capability ledger `semantics` MUST live in the typed contract — feature
+    detection from generated types is its whole point (adversary P1-4: an
+    untyped whoami makes the ledger invisible to exactly the clients it was
+    built for). Sub-objects that are still evolving governance surfaces
+    (hub_rules, hub_state, delegations) stay loosely typed until their own
+    migration wave."""
+
+    id: str
+    name: str = ""
+    about: str = ""
+    operator: bool = False
+    created_at: float = 0.0
+    version: str
+    protocol: str
+    semantics: list[str] = Field(default_factory=list)
+    hub_rules: dict[str, Any] = Field(default_factory=dict)
+    hub_state: dict[str, Any] = Field(default_factory=dict)
+    delegations: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class Channel(BaseModel):

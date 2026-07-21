@@ -1,0 +1,40 @@
+{
+  "name": "0102 addressed-message debts: a peer reply NAMING you obliges you; your reply clears it; an answers-carrying reply and a peer fyi never oblige",
+  "setup": [
+    {"op": "register", "id": "alice"},
+    {"op": "register", "id": "bob"},
+    {"op": "channel", "name": "room", "owner": "alice", "members": ["bob"]},
+    {"op": "post", "as": "alice", "channel": "room", "ref": "seed",
+     "body": "context thread", "status": "fyi"},
+    {"op": "post", "as": "alice", "channel": "room", "ref": "directive",
+     "body": "bob: now also update the docs", "title": "docs too",
+     "status": "reply", "reply_to": "$seed.id", "to": ["bob"]}
+  ],
+  "expect": [
+    {"call": "owed", "as": "bob", "match": {
+      "to_answer": [{"seq": "$directive.seq", "sender": "alice",
+                     "pending_asks": []}]}},
+
+    {"op": "post", "as": "bob", "channel": "room", "ref": "engage",
+     "body": "docs updated", "status": "reply", "reply_to": "$directive.id"},
+
+    {"call": "owed", "as": "bob", "match": {"to_answer": []}},
+
+    {"op": "post", "as": "alice", "channel": "room", "ref": "q2",
+     "body": "one ask", "status": "open",
+     "data": {"asks": [{"id": "1", "text": "bob: eta?", "to": ["bob"]}]}},
+    {"op": "post", "as": "bob", "channel": "room", "ref": "ans",
+     "body": "tonight", "status": "reply", "reply_to": "$q2.id",
+     "to": ["alice"], "data": {"answers": ["1"]}},
+
+    {"call": "owed", "as": "alice", "match": {
+      "to_answer": [],
+      "to_consume": [{"seq": "$q2.seq", "answered_by": "bob"}]}},
+
+    {"op": "post", "as": "bob", "channel": "room", "ref": "gesture",
+     "body": "fyi, heading out", "status": "fyi", "to": ["alice"]},
+
+    {"call": "owed", "as": "alice", "match": {
+      "to_answer": []}}
+  ]
+}

@@ -38,14 +38,20 @@ from ..models import (
     MAX_STORE_VALUE_BYTES,
     AgentInfo,
     ColleagueNote,
+    ConsumeRow,
     Envelope,
     FsFile,
     Kind,
     Message,
+    MessageRow,
+    ObligationRow,
+    OwedCounts,
+    OwedReport,
     PostMessage,
     Status,
     StoreEntry,
     Urgency,
+    WaitingRow,
     dm_channel_name,
     parse_work_id,
     sanitize_text,
@@ -1115,13 +1121,48 @@ class HubService:
         self.notifier.notify()
 
     def get_messages(self, agent: AgentInfo, channel: str,
-                     since_seq: int = 0, limit: int = 200) -> list[Message]:
+                     since_seq: int = 0, limit: int = 200) -> list[MessageRow]:
         """Browse channel history. This is a bulk scan, NOT a deliberate read:
         it does NOT record read receipts, so paging history can no longer
         silently un-pin a critical or clear an obligation (v0.3 bug M2). Use
-        read_message to actually attend to (and clear) a specific message."""
+        read_message to actually attend to (and clear) a specific message.
+
+        Rows are DECORATED with the two thread-derived facts every client
+        was re-deriving from its own reply scans (parity move 2, agora-0118):
+        `pending_asks` and `has_resolved_reply`. One batched reply query per
+        page, the same discharge_state the obligation surfaces use — so a
+        history page and /owed can never tell a different story about the
+        same thread."""
         self.require_membership(channel, agent.id)
-        return self.db.get_messages(channel, since_seq, limit)
+        messages = self.db.get_messages(channel, since_seq, limit)
+        return self._decorate_rows(messages)
+
+    def get_message_by_seq(self, agent: AgentInfo, channel: str,
+                           seq: int) -> MessageRow:
+        """Positional lookup (parity move 2): '#N' is how humans and UIs cite
+        messages, and every client used to page history to resolve one. Like
+        get_messages this is a browse, NOT a deliberate read — no receipt."""
+        self.require_membership(channel, agent.id)
+        m = self.db.get_message_by_seq(channel, seq)
+        if m is None:
+            raise HubError(404, f"no message #{seq} in '{channel}'")
+        return self._decorate_rows([m])[0]
+
+    def _decorate_rows(self, messages: list[Message]) -> list[MessageRow]:
+        """Message -> MessageRow: attach pending_asks / has_resolved_reply
+        from ONE batched reply scan. Retracted rows keep empty decorations —
+        their obligations are already cleared everywhere else."""
+        ops = self.operator_ids()
+        by_parent = self.db.replies_map([m.id for m in messages])
+        out: list[MessageRow] = []
+        for m in messages:
+            row = MessageRow(**m.model_dump())
+            if not m.retracted:
+                ds = discharge_state(m, by_parent.get(m.id, []), ops)
+                row.pending_asks = [] if ds.closed else list(ds.pending)
+                row.has_resolved_reply = ds.has_resolved_reply
+            out.append(row)
+        return out
 
     def channel_digest(self, agent: AgentInfo, channel: str) -> dict[str, Any]:
         """Fold a channel's history into actionable knowledge — mechanically,
@@ -1237,7 +1278,13 @@ class HubService:
             state = discharge_state(message, self.db.replies_to(message.id),
                                     self.operator_ids())
             closed = state.closed
-            pending, total = state.pending, state.total
+            # A CLOSED thread has no pending asks on ANY surface (impl
+            # adversary P2-2): the history row, /owed and the digest already
+            # blank them on closure; the envelope reporting raw discharge
+            # state was the one dissenting voice — an authoritatively
+            # resolved question must not keep waving its unanswered ask ids.
+            pending = [] if closed else state.pending
+            total = state.total
             has_resolved = state.has_resolved_reply
             # Only the pinned class can re-deliver; a read receipt turns its
             # re-surfaces headline-only (redelivery=true, body withheld).
@@ -1495,10 +1542,12 @@ class HubService:
         return [m for m in self.db.addressed_directives(channels)
                 if self._is_addressed_debt(agent_id, m)]
 
-    def owed(self, agent: AgentInfo) -> dict[str, Any]:
+    def owed(self, agent: AgentInfo) -> OwedReport:
         """The agent's outstanding debts (0079), read receipts deliberately
         IGNORED: read-but-unanswered is precisely the lurk the receipt filter
-        would hide. Two ledgers:
+        would hide. Returns the TYPED OwedReport (parity move 1, agora-0118):
+        the served OpenAPI states this exact shape, so generated clients
+        replace hand-kept ones. Two ledgers:
 
         - `to_answer`: open/blocked messages addressed to the agent — via
           message `to`, an advisory assignee, or a still-pending per-ask `to`
@@ -1548,13 +1597,13 @@ class HubService:
                 # stops the NEXT semantics change repeating the storm.
                 born = max(m.created_at, self._directive_epoch)
                 age = now - born - self.paused_seconds_since(born)
-                to_answer.append({
-                    "channel": m.channel, "id": m.id, "seq": m.seq,
-                    "from": m.sender, "title": m.title,
-                    "pending_asks": [], "asks_naming_you": [],
-                    "age_minutes": round(age / 60, 1),
-                    "escalated": age > sla_cache[m.channel] * 60.0,
-                })
+                to_answer.append(ObligationRow(
+                    channel=m.channel, id=m.id, seq=m.seq,
+                    sender=m.sender, title=m.title,
+                    created_at=m.created_at,
+                    age_minutes=round(age / 60, 1),
+                    escalated=age > sla_cache[m.channel] * 60.0,
+                ))
                 continue
             ds = discharge_state(m, replies, ops)
             if ds.closed:
@@ -1569,18 +1618,19 @@ class HubService:
             if m.channel not in sla_cache:
                 sla_cache[m.channel] = self.channel_sla(m.channel)
             age = now - m.created_at - self.paused_seconds_since(m.created_at)
-            to_answer.append({
-                "channel": m.channel, "id": m.id, "seq": m.seq,
-                "from": m.sender, "title": m.title,
-                "pending_asks": ds.pending,
-                "asks_naming_you": sorted(
+            to_answer.append(ObligationRow(
+                channel=m.channel, id=m.id, seq=m.seq,
+                sender=m.sender, title=m.title,
+                pending_asks=ds.pending,
+                asks_naming_you=sorted(
                     str(a["id"]) for a in asks_of(m)
                     if agent.id in (a.get("to") or []) and str(a["id"]) in ds.pending),
-                "age_minutes": round(age / 60, 1),
-                "escalated": age > sla_cache[m.channel] * 60.0,
-            })
-        to_consume: list[dict[str, Any]] = []
-        waiting_on: list[dict[str, Any]] = []
+                created_at=m.created_at,
+                age_minutes=round(age / 60, 1),
+                escalated=age > sla_cache[m.channel] * 60.0,
+            ))
+        to_consume: list[ConsumeRow] = []
+        waiting_on: list[WaitingRow] = []
         cursor_cache: dict[tuple[str, str], int] = {}
         for m in self.db.my_open_messages(agent.id, channels):
             replies = self.db.replies_to(m.id)
@@ -1597,13 +1647,13 @@ class HubService:
                             or any(x.sender == agent.id and x.seq > r.seq
                                    for x in replies))
                 if not consumed:
-                    to_consume.append({
-                        "channel": m.channel, "id": m.id, "seq": m.seq,
-                        "title": m.title, "your_asks": [str(x) for x in answers],
-                        "answered_by": r.sender, "answer_id": r.id,
-                        "answer_seq": r.seq,
-                        "age_minutes": round((now - r.created_at) / 60, 1),
-                    })
+                    to_consume.append(ConsumeRow(
+                        channel=m.channel, id=m.id, seq=m.seq,
+                        title=m.title, your_asks=[str(x) for x in answers],
+                        answered_by=r.sender, answer_id=r.id,
+                        answer_seq=r.seq,
+                        age_minutes=round((now - r.created_at) / 60, 1),
+                    ))
             # waiting_on (asker side of the debrief): per still-pending ask
             # addressee, has the hub SERVED them past your question? "acked
             # past, no reply" and "not yet served" are different waits — one
@@ -1632,14 +1682,15 @@ class HubService:
                         state = "acked-past-no-reply"
                     else:
                         state = "not-yet-acked"
-                    waiting_on.append({
-                        "channel": m.channel, "seq": m.seq, "ask": str(a["id"]),
-                        "seat": seat, "state": state,
-                    })
-        return {"to_answer": to_answer, "to_consume": to_consume,
-                "waiting_on": waiting_on,
-                "counts": {"to_answer": len(to_answer),
-                           "to_consume": len(to_consume)}}
+                    waiting_on.append(WaitingRow(
+                        channel=m.channel, seq=m.seq, ask=str(a["id"]),
+                        seat=seat, state=state,
+                    ))
+        return OwedReport(
+            to_answer=to_answer, to_consume=to_consume, waiting_on=waiting_on,
+            counts=OwedCounts(to_answer=len(to_answer),
+                              to_consume=len(to_consume)),
+            computed_at=now)
 
     async def wait_inbox(self, agent: AgentInfo, timeout: float) -> list[Envelope]:
         """Long-poll: return unread envelopes, waiting up to `timeout` for one."""
@@ -2767,26 +2818,26 @@ class HubService:
         operators = sorted(self.operator_ids())
         for op in operators:
             info = AgentInfo(id=op, name=op, operator=True)
-            for o in self.owed(info)["to_answer"]:
+            for o in self.owed(info).to_answer:
                 # A meaningful label even when the sender set no title (DM
                 # asks routinely omit it): title, else the first pending
                 # ask's text, else a body snippet — never a bare
                 # "(untitled)" on the surface the operator reads first.
-                what = o["title"]
+                what = o.title
                 if not what:
-                    msg = self.db.get_message(o["id"])
+                    msg = self.db.get_message(o.id)
                     if msg is not None:
-                        pend = set(o.get("pending_asks") or [])
+                        pend = set(o.pending_asks)
                         ask_texts = [str(a.get("text", "")) for a in asks_of(msg)
                                      if str(a.get("id")) in pend and a.get("text")]
                         what = (ask_texts[0] if ask_texts
                                 else (msg.body or "").strip()[:80])
                 rows.append({
                     "kind": "ask", "operator": op,
-                    "channel": o["channel"], "seq": o["seq"], "id": o["id"],
+                    "channel": o.channel, "seq": o.seq, "id": o.id,
                     "what": what or "(untitled ask)",
-                    "who_waits": o["from"],
-                    "age_minutes": o["age_minutes"],
+                    "who_waits": o.sender,
+                    "age_minutes": o.age_minutes,
                     "one_action": "answer it (or decline on the record)",
                 })
             for channel in self.db.channels_of(op):
@@ -3244,11 +3295,11 @@ class HubService:
             debts = self.owed(info)
             acked_unanswered = 0
             cursor_cache: dict[str, int] = {}
-            for row in debts["to_answer"]:
-                ch = row["channel"]
+            for row in debts.to_answer:
+                ch = row.channel
                 if ch not in cursor_cache:
                     cursor_cache[ch] = self.db.get_cursor(agent_id, ch)
-                if cursor_cache[ch] >= row["seq"]:
+                if cursor_cache[ch] >= row.seq:
                     acked_unanswered += 1
             reception_state, reception_age = self.presence.reception(agent_id)
             out.append({
@@ -3264,8 +3315,8 @@ class HubService:
                 "unread": len(envelopes),
                 "pending_obligations": len(pending),
                 "oldest_pending_minutes": round((now - oldest) / 60, 1) if oldest else None,
-                "owed_answers": debts["counts"]["to_answer"],
-                "owed_consumption": debts["counts"]["to_consume"],
+                "owed_answers": debts.counts.to_answer,
+                "owed_consumption": debts.counts.to_consume,
                 "acked_unanswered": acked_unanswered,
                 "refused_sends_1h": len(refusals),
                 "last_refusal": refusals[-1] if refusals else None,

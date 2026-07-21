@@ -338,6 +338,13 @@ def _qualified_ref_app():
         assert (since, limit) == (6, 1)
         return [msg]
 
+    async def message_by_seq(channel, seq):
+        # Same wrong-channel guard on the by-seq path (agora-0118 move 2),
+        # which is what _locate rides now.
+        assert channel == dm_chan, f"resolved in the wrong channel: {channel}"
+        assert seq == 7
+        return msg
+
     calls = {"read": [], "post": []}
 
     async def read(channel, mid):
@@ -350,6 +357,7 @@ def _qualified_ref_app():
 
     app.client.list_channels = list_channels
     app.client.history = history
+    app.client.message_by_seq = message_by_seq
     app.client.read = read
     app.client.post = post
     out: list[str] = []
@@ -402,10 +410,16 @@ def test_numeric_and_unknown_heads_fall_through_to_classic_parse():
 
     app, calls, out = _qualified_ref_app()
 
-    async def history(channel, since=0, limit=200):
+    async def message_by_seq(channel, seq):
         # classic parse in the CURRENT room: seq 727 not found there
         assert channel == "commons"
+        raise Exception("404 no message")
+
+    async def history(channel, since=0, limit=200):
+        # the old-hub fallback probe (impl adversary P1-1a) also misses
+        assert channel == "commons"
         return []
+    app.client.message_by_seq = message_by_seq
     app.client.history = history
     asyncio.run(app.cmd_read("727:1"))
     assert calls["read"] == []                       # not found in commons
@@ -476,9 +490,9 @@ def test_reply_ask_syntax_attaches_answers():
                   title="TASK COMPLETE", body="…",
                   data={"asks": [{"id": "1", "text": "a"}, {"id": "2", "text": "b"}]})
 
-    async def history(channel, since=0, limit=200):
-        assert channel == "commons"
-        return [msg]
+    async def message_by_seq(channel, seq):
+        assert channel == "commons" and seq == 727
+        return msg
 
     posts = []
 
@@ -486,7 +500,7 @@ def test_reply_ask_syntax_attaches_answers():
         posts.append((channel, kw.get("reply_to"), kw.get("answers")))
         return msg
 
-    app.client.history = history
+    app.client.message_by_seq = message_by_seq
     app.client.post = post
     out: list[str] = []
     app._print = lambda text="": out.append(text)
@@ -538,40 +552,35 @@ def test_ask_at_mention_names_the_seat(monkeypatch):
     assert any("owed by agency" in line for line in out)
 
 
-def test_read_marks_ask_state_from_digest_and_tolerates_ask_suffix():
-    """A deliberate read fetches the digest to mark which asks are still
-    pending (discharge lives hub-side, in the replies); a question absent
-    from the open list reads as fully answered. '/read 727:1' reads 727."""
+def test_read_marks_ask_state_from_served_rows_and_tolerates_ask_suffix():
+    """A deliberate read marks which asks are still pending from the hub's
+    SERVED row decoration (agora-0118 move 2: by-seq rows carry pending_asks
+    from the same discharge logic as /owed — the digest-page probe is gone);
+    an empty pending list reads as fully answered. '/read 727:1' reads 727."""
     import asyncio
 
     from agora.chat import ChatApp
-    from agora.models import Message
+    from agora.models import Message, MessageRow
 
     app = ChatApp("http://127.0.0.1:1", "k", "laurent")
     app.current = "commons"
     msg = Message(id="01HASK727", channel="commons", seq=727, sender="uic",
                   title="TASK COMPLETE", body="…",
                   data={"asks": [{"id": "1", "text": "a"}, {"id": "2", "text": "b"}]})
+    pending = {"asks": ["2"]}                   # mutated per phase below
 
-    async def history(channel, since=0, limit=200):
-        return [msg]
+    async def message_by_seq(channel, seq):
+        assert channel == "commons" and seq == 727
+        row = MessageRow(**msg.model_dump())
+        row.pending_asks = list(pending["asks"])
+        return row
 
     async def read(channel, mid):
         assert (channel, mid) == ("commons", "01HASK727")
         return [msg]
 
-    digest = {"open_questions": [
-        {"seq": 727, "pending_asks": [{"id": "2", "text": "b"}]}]}
-
-    class FakeHTTP:
-        async def get(self, path):
-            assert path == "/channels/commons/digest"
-            return digest
-
-    app.client.history = history
+    app.client.message_by_seq = message_by_seq
     app.client.read = read
-    app.client._http = FakeHTTP()
-    app.client._json = lambda resp: resp
     out: list[str] = []
     app._print = lambda text="": out.append(text)
 
@@ -579,7 +588,7 @@ def test_read_marks_ask_state_from_digest_and_tolerates_ask_suffix():
     text = "\n".join(out)
     assert "✓ [1]" in text and "○ [2]" in text  # 1 answered, 2 still owed
     out.clear()
-    digest["open_questions"] = []               # discharged: left the open list
+    pending["asks"] = []                        # discharged: nothing pending
     asyncio.run(app.cmd_read("727"))
     text = "\n".join(out)
     assert "✓ [1]" in text and "✓ [2]" in text and "○" not in text

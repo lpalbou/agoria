@@ -17,7 +17,14 @@ from pydantic import BaseModel, StrictInt
 from starlette.concurrency import run_in_threadpool
 
 from ..db import StoreConflict
-from ..models import AgentInfo, PostMessage
+from ..models import (
+    AgentInfo,
+    Envelope,
+    MessageRow,
+    OwedReport,
+    PostMessage,
+    WhoamiReport,
+)
 from .service import HubError, HubService, safe_serve_content_type
 
 
@@ -253,26 +260,33 @@ def join(
 def whoami(
     agent: AgentInfo = Depends(current_agent),
     service: HubService = Depends(get_service),
-) -> dict[str, Any]:
-    """Identity + the hub rules + the hub state. Rules ride whoami because it
-    is the one call every agent's session-start convention already makes —
-    delivery lands exactly at the boundary the hub cannot otherwise see (new
-    session, post-compaction), with zero extra round-trips. hub_state is how
-    a standing-down agent checks for the resume without posting."""
-    from .. import PROTOCOL_VERSION, __version__
+) -> WhoamiReport:
+    """Identity + the hub rules + the hub state, TYPED (parity move 1). Rules
+    ride whoami because it is the one call every agent's session-start
+    convention already makes — delivery lands exactly at the boundary the hub
+    cannot otherwise see (new session, post-compaction), with zero extra
+    round-trips. hub_state is how a standing-down agent checks for the resume
+    without posting."""
+    from .. import PROTOCOL_SEMANTICS, PROTOCOL_VERSION, __version__
     pause = service.hub_paused()
     hub_state = ({"state": "paused", **pause} if pause is not None
                  else {"state": "open"})
-    return {**agent.model_dump(),
-            # The running hub's version + wire protocol, so every agent (and
-            # the chat login) sees exactly what it is talking to — the single
-            # source is agora.__version__ (pyproject reads it dynamically).
-            "version": __version__, "protocol": PROTOCOL_VERSION,
-            "hub_rules": service.hub_rules(),
-            "hub_state": hub_state,
-            # Delegation is verifiable state (ADR-0004): every agent sees who
-            # holds which delegated powers — prose claims count for nothing.
-            "delegations": service.active_delegations()}
+    return WhoamiReport(
+        **agent.model_dump(),
+        # The running hub's version + wire protocol, so every agent (and
+        # the chat login) sees exactly what it is talking to — the single
+        # source is agora.__version__ (pyproject reads it dynamically).
+        version=__version__, protocol=PROTOCOL_VERSION,
+        # Capability ledger (agora-0118): behavioral semantics this hub
+        # serves BEYOND the wire version string. Clients feature-detect
+        # here instead of parsing version numbers; the agora/0.4 bump
+        # will fold the stable ones into the version itself.
+        semantics=list(PROTOCOL_SEMANTICS),
+        hub_rules=service.hub_rules(),
+        hub_state=hub_state,
+        # Delegation is verifiable state (ADR-0004): every agent sees who
+        # holds which delegated powers — prose claims count for nothing.
+        delegations=service.active_delegations())
 
 
 class SetHubRules(BaseModel):
@@ -623,9 +637,24 @@ def get_messages(
     limit: int = Query(default=200, ge=1, le=1000),
     agent: AgentInfo = Depends(current_agent),
     service: HubService = Depends(get_service),
-) -> list[dict[str, Any]]:
-    messages = _run(service.get_messages, agent, channel, since, limit)
-    return [m.model_dump() for m in messages]
+) -> list[MessageRow]:
+    """History page, TYPED and decorated (parity move 2, agora-0118): each
+    row carries `pending_asks` and `has_resolved_reply` computed by the same
+    discharge logic as /owed, so clients render thread state instead of
+    re-deriving it from their own reply scans."""
+    return _run(service.get_messages, agent, channel, since, limit)
+
+
+@router.get("/channels/{channel}/messages/by-seq/{seq}")
+def get_message_by_seq(
+    channel: str,
+    seq: int,
+    agent: AgentInfo = Depends(current_agent),
+    service: HubService = Depends(get_service),
+) -> MessageRow:
+    """Positional lookup (parity move 2): resolve '#N' in one call instead of
+    paging history. A browse, not a deliberate read — no read receipt."""
+    return _run(service.get_message_by_seq, agent, channel, seq)
 
 
 @router.post("/channels/{channel}/messages")
@@ -744,18 +773,21 @@ async def inbox(
     wait: float = Query(default=0.0, ge=0.0, le=55.0),
     agent: AgentInfo = Depends(current_agent),
     service: HubService = Depends(get_service),
-) -> list[dict[str, Any]]:
+) -> list[Envelope]:
+    """Unread + sticky envelopes, TYPED (parity move 1, agora-0118): the
+    served OpenAPI states the Envelope shape clients used to hand-keep."""
     if wait > 0:
         messages = await service.wait_inbox(agent, wait)
     else:
         messages = service.inbox(agent)
-    rows = [m.model_dump() for m in messages]
+    rows = list(messages)
     # Version handshake (0.12.3): current clients identify themselves with
     # X-Agora-Client and carry their OWN staleness banner. A missing header
     # means a pre-handshake client — the blind audience — so the hub appends
     # the notice to non-empty deliveries (an empty inbox hides nothing).
     if rows and not request.headers.get("x-agora-client"):
-        rows.append(_stale_client_notice(rows))
+        rows.append(Envelope(**_stale_client_notice(
+            [rows[0].model_dump()])))
     return rows
 
 
@@ -764,10 +796,15 @@ def owed(
     agent: AgentInfo = Depends(current_agent),
     service: HubService = Depends(get_service),
     reception: str = Header(default="", alias="X-Agora-Reception"),
-) -> dict[str, Any]:
+) -> OwedReport:
     """The caller's outstanding debts (anti-lurk, 0079): asks awaiting THEIR
     answer and answers to THEIR OWN asks awaiting consumption. Read receipts
     are deliberately ignored — read-but-unanswered is the lurk case.
+
+    TYPED response (parity move 1, agora-0118): the OpenAPI this app serves
+    states the exact OwedReport shape, so clients GENERATE their types from
+    the artifact instead of hand-keeping shapes that drift. Wire compat: rows
+    still emit the deprecated `from` alias beside `sender` until agora/0.4.
 
     X-Agora-Reception on this poll (0098) marks the seat's reception loop as
     armed NOW — the heartbeat that lets the hub distinguish a live listener

@@ -25,7 +25,15 @@ import httpx
 import websockets
 
 from .. import PROTOCOL_VERSION
-from ..models import Envelope, Message, PostMessage, Status, Urgency
+from ..models import (
+    Envelope,
+    Message,
+    MessageRow,
+    OwedReport,
+    PostMessage,
+    Status,
+    Urgency,
+)
 from .inbox import Inbox
 
 
@@ -84,10 +92,13 @@ class AgoraClient:
         in-progress / pending-review / done), derived across its channels."""
         return self._json(await self._http.get("/board"))
 
-    async def owed(self) -> dict[str, Any]:
+    async def owed(self) -> OwedReport:
         """The caller's outstanding debts: asks awaiting THEIR answer and
-        answers to their own asks awaiting consumption (anti-lurk, 0079)."""
-        return self._json(await self._http.get("/owed"))
+        answers to their own asks awaiting consumption (anti-lurk, 0079).
+        TYPED since 0.12.30 (agora-0118): the first-party client parses the
+        same OwedReport the OpenAPI artifact states — canonical `sender`,
+        never the deprecated `from` alias."""
+        return OwedReport(**self._json(await self._http.get("/owed")))
 
     async def create_group(self, name: str, members: list[str], *,
                            purpose: str = "", opening_post: str = "",
@@ -133,11 +144,20 @@ class AgoraClient:
     async def list_channels(self) -> list[dict[str, Any]]:
         return self._json(await self._http.get("/channels"))
 
-    async def history(self, channel: str, since: int = 0, limit: int = 200) -> list[Message]:
+    async def history(self, channel: str, since: int = 0, limit: int = 200) -> list[MessageRow]:
+        """History page. Rows are hub-decorated (agora-0118 move 2):
+        `pending_asks` / `has_resolved_reply` come from the hub's own
+        discharge logic — render them, never re-derive thread state."""
         rows = self._json(await self._http.get(
             f"/channels/{channel}/messages", params={"since": since, "limit": limit},
         ))
-        return [Message(**row) for row in rows]
+        return [MessageRow(**row) for row in rows]
+
+    async def message_by_seq(self, channel: str, seq: int) -> MessageRow:
+        """Resolve '#N' in one call (agora-0118 move 2). A browse, not a
+        deliberate read — records no receipt."""
+        return MessageRow(**self._json(await self._http.get(
+            f"/channels/{channel}/messages/by-seq/{seq}")))
 
     async def post(self, channel: str, body: str, *, title: str = "",
                    status: Status = Status.fyi, urgency: Urgency = Urgency.inbox,

@@ -1024,6 +1024,38 @@ class Database:
             ).fetchall()
         return [self._row_to_message(r) for r in rows]
 
+    def replies_map(self, message_ids: list[str]) -> dict[str, list[Message]]:
+        """Replies to EACH of `message_ids`, grouped by parent — one batched
+        query per 500-id chunk for a whole history page (parity move 2,
+        agora-0118) instead of the N per-row `replies_to` calls that
+        decorating every listed message would otherwise cost. Chunked because
+        a 1000-row page (the route's max) would exceed the 999
+        bound-variable ceiling of older bundled SQLites (modern builds allow
+        32766, but the package must not depend on the host's build). Order
+        within each group is seq order, matching replies_to."""
+        out: dict[str, list[Message]] = {}
+        for i in range(0, len(message_ids), 500):
+            chunk = message_ids[i:i + 500]
+            placeholders = ",".join("?" for _ in chunk)
+            with self._lock:
+                rows = self._conn.execute(
+                    f"SELECT * FROM messages WHERE reply_to IN ({placeholders}) "
+                    "ORDER BY seq", (*chunk,),
+                ).fetchall()
+            for r in rows:
+                out.setdefault(r["reply_to"], []).append(self._row_to_message(r))
+        return out
+
+    def get_message_by_seq(self, channel: str, seq: int) -> Message | None:
+        """Positional lookup (parity move 2): chat's `/read N` and every UI's
+        'jump to #N' used to page history and search client-side — the hub
+        has the index."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM messages WHERE channel = ? AND seq = ?",
+                (channel, seq)).fetchone()
+        return self._row_to_message(row) if row else None
+
     def obligation_candidates(self, agent_id: str, channels: list[str]) -> list[Message]:
         """CANDIDATE obligations to the agent's channels: status open/blocked,
         not sent by the agent — READ OR NOT. The 'is it answered?' test is

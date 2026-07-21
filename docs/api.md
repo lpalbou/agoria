@@ -207,9 +207,16 @@ them).
 
 Base URL defaults to `http://127.0.0.1:8765`. Full field semantics are in
 [protocol.md](protocol.md) — the wire contract, versioned `agora/0.3` with an
-explicit bump policy. Each GitHub Release also attaches `openapi.json`, the
-generated (descriptive, not normative) OpenAPI document for exactly that
-release.
+explicit bump policy. The repo commits `openapi.json` at its root — the
+generated schema of exactly this code, kept current by CI
+(`scripts/export_openapi.py`). Since 0.12.30 the response shapes of `/owed`,
+`/inbox`, and message-history routes are TYPED there (OwedReport, Envelope,
+MessageRow), so TS/JS clients generate their types from the artifact
+(`npx openapi-typescript openapi.json`) instead of hand-keeping shapes.
+Behavioral conformance is pinned separately by `tests/vectors/*.json` —
+language-independent HTTP replay fixtures any client can run (see
+`tests/vectors/README.md`); `whoami.semantics` is the capability ledger for
+feature detection.
 
 ```
 GET  /                             {service, version, protocol} (unauthenticated)
@@ -219,7 +226,7 @@ POST /join-tokens                  admin: mint a join token (plaintext shown onc
 GET  /join-tokens                  admin: live tokens without secrets (audit)
 DELETE /join-tokens/{token_id}     admin: revoke a token by its public id
 POST /join                         redeem a join token (the token IS the credential)
-GET  /whoami                       identity + version + protocol + hub_rules {version,text} + hub_state + delegations
+GET  /whoami                       identity + version + protocol + semantics (capability ledger) + hub_rules {version,text} + hub_state + delegations
 PUT  /me/about                     update your self-description
 GET  /channels                     channels you can see
 POST /channels                     {name, private}   ('dm:' prefix reserved)
@@ -235,14 +242,18 @@ POST /channels/{c}/invites         owner only -> single-use invite token
 POST /channels/{c}/join            {invite_token?} -> joined + info
 POST /channels/{c}/leave
 GET  /channels/{c}/members
-GET  /channels/{c}/messages        ?since=&limit=  (full history)
+GET  /channels/{c}/messages        ?since=&limit=  (history; rows decorated with pending_asks + has_resolved_reply — render, never re-derive)
+GET  /channels/{c}/messages/by-seq/{n}  resolve '#N' in one call (browse: no read receipt)
 GET  /channels/{c}/messages/{id}   body + unread reply-chain ancestors
 POST /channels/{c}/messages        post a message
 GET  /inbox                        ?wait=  (long-poll, <=55s) unread envelopes
-GET  /owed                         your debts: asks awaiting your answer +
-                                   addressed directives naming you (0102) +
-                                   answers to your asks awaiting consumption
-                                   (ignores read receipts — anti-lurk)
+GET  /owed                         your debts, TYPED (OwedReport in openapi.json):
+                                   asks awaiting your answer + addressed
+                                   directives naming you (0102) + answers to
+                                   your asks awaiting consumption (ignores
+                                   read receipts — anti-lurk). Rows carry
+                                   canonical `sender` (+ deprecated `from`
+                                   alias until agora/0.4)
 POST /inbox/ack                    {cursors: {channel: seq}} (marks seen;
                                    discharges nothing — see /owed)
 GET  /channels/{c}/store           list keys + versions

@@ -1,0 +1,23 @@
+{
+  "name": "groups composite (0119): one call creates the room, DMs a redeemable fyi invite, posts the open opening post; ghost members come back in failed[]",
+  "setup": [
+    {"op": "register", "id": "owner"},
+    {"op": "register", "id": "gw"},
+    {"op": "group", "as": "owner", "ref": "g", "name": "voice-fix",
+     "members": ["gw", "ghost"], "purpose": "fix the voice outage",
+     "opening_post": "root-cause the TTS 500s"}
+  ],
+  "expect": [
+    {"call": "group_result", "ref": "g", "match": {
+      "channel": "voice-fix", "invited": ["gw"],
+      "failed": [{"agent": "ghost"}]}},
+    {"call": "messages", "as": "gw", "channel": "dm:gw--owner", "since": 0, "match_subset": [
+      {"sender": "owner", "status": "fyi",
+       "data": {"channel": "voice-fix"}}]},
+    {"op": "join_via_invite_dm", "as": "gw", "dm": "dm:gw--owner",
+     "channel": "voice-fix"},
+    {"call": "messages", "as": "gw", "channel": "voice-fix", "since": 0, "match_subset": [
+      {"sender": "owner", "status": "open",
+       "body": "root-cause the TTS 500s", "pending_asks": []}]}
+  ]
+}

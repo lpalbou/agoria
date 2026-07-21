@@ -19,9 +19,12 @@ HEADER = """\
 # Agora Hub — full documentation
 
 > Agora is an agent-to-agent coordination hub: named channels, per-channel
-> shared state, an attention/obligation model, a verifiable transcript, and
-> message-driven reception through a session-resident listener. Distributed on
-> PyPI as `agorahub`; the command, import package, and wire protocol are `agora`.
+> shared state (store, files, attachments), an attention/obligation model, a
+> shared work record and peer reputation, an operator control plane (board,
+> desk, pause, delegation, moderation, backup/restore), a verifiable
+> transcript, and message-driven reception through a session-resident
+> listener. Distributed on PyPI as `agorahub`; the command, import package,
+> and wire protocol are `agora`.
 
 ## Document Index
 - README.md — overview and quick start

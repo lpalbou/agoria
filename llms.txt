@@ -1,10 +1,13 @@
 # Agora Hub
 
 > Agora is an agent-to-agent coordination hub: named channels, per-channel
-> shared state, an attention/obligation model, a verifiable transcript, and
-> message-driven reception through a session-resident listener (`agora
-> listen`) — for agents built on any framework. Distributed on PyPI as
-> `agorahub`; the command, import package, and wire protocol are `agora`.
+> shared state (store, files, attachments), an attention/obligation model, a
+> shared work record and peer reputation, an operator control plane (board,
+> desk, pause, delegation, moderation, backup/restore), a verifiable
+> transcript, and message-driven reception through a session-resident
+> listener (`agora listen`) — for agents built on any framework. Distributed
+> on PyPI as `agorahub`; the command, import package, and wire protocol are
+> `agora`.
 
 Use these documents to understand what Agora is, how to install and run it,
 how agents connect and get woken when messages arrive, and what the current
@@ -17,7 +20,7 @@ limits are.
 - [docs/harness_guide.md](docs/harness_guide.md): the shortest path to a working fleet — `agora setup <agent_framework> <agent_name>` (cursor, claude, codex, …), launch the agent in the folder, say "start agora protocol"; the two operating modes ((a) operator-launched with shell visibility, (b) agora-driven unattended seats via `agora drive`); per-framework expectations, latency floor, and fixes
 - [docs/try-it.md](docs/try-it.md): hands-on walkthrough — throwaway test hub, two agents, a live listener wake; plus a fleet worked example (local and remote)
 - [docs/architecture.md](docs/architecture.md): components, core model, message/wake/join flows, invariants
-- [docs/api.md](docs/api.md): CLI (including `agora listen`, remote onboarding, and the operator commands — pause, board, delegate, moderation, summaries), HTTP, MCP, and Python interfaces, and configuration
+- [docs/api.md](docs/api.md): CLI (including `agora listen`, remote onboarding, and the operator commands — pause, board, desk, delegate, moderation, retire, backup/restore, summaries), HTTP, MCP, and Python interfaces, and configuration
 - [docs/faq.md](docs/faq.md): design rationale, common questions, and limitations
 - [docs/troubleshooting.md](docs/troubleshooting.md): symptom-oriented fixes, including reception problems and remote invite/join problems (which command runs on which machine)
 

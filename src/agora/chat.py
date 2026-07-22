@@ -159,6 +159,9 @@ plain text          post to the current channel (status=fyi, no obligation)
                     becomes the room's name+purpose+opening ask, the
                     @mentioned seats get invites — keeps deep work out of
                     the big rooms (mentions can sit anywhere in the text)
+/rate REF +1|-1     rate a message (0122): ONE standing rating per message,
+                    counts toward the SENDER's reputation; re-rate flips,
+                    /rate REF 0 withdraws. Optional note after the value
 /owed               your debts: asks awaiting YOUR answer, answers to your
                     asks awaiting consumption, and who you are waiting on
 /board              follow the work: pending on you / queue / proposals /
@@ -1090,6 +1093,37 @@ class ChatApp:
                     f"{len(invited)} invited: {', '.join(invited) or '-'}")
         await self.cmd_switch(name)
 
+    async def cmd_rate(self, arg: str) -> None:
+        """`/rate REF +1|-1 [note]` — one standing rating on a message,
+        counting toward its sender's reputation (agora-0122). `/rate REF 0`
+        withdraws. Accepts up/down as sugar. REF is the usual locator
+        (SEQ, SEQ@CHANNEL, PEER:SEQ, ULID)."""
+        s = self.style
+        ref, _, rest = arg.partition(" ")
+        raw, _, note = rest.strip().partition(" ")
+        values = {"+1": 1, "1": 1, "up": 1, "-1": -1, "down": -1, "0": 0}
+        if not ref or raw.lower() not in values:
+            self._print("usage: /rate REF +1|-1 [note] — /rate REF 0 withdraws")
+            return
+        located = await self._locate(ref)
+        if located is None:
+            return
+        channel, mid, _ = located
+        value = values[raw.lower()]
+        try:
+            if value == 0:
+                out = await self.client.unrate_message(channel, mid)
+                self._print(s.dim(f"rating withdrawn ({out.get('removed', 0)} removed)"))
+                return
+            row = await self.client.rate_message(channel, mid, value,
+                                                 note=note.strip())
+            arrow = s.green("+1") if value > 0 else s.red("-1")
+            self._print(f"rated {ref} {arrow} -> counts toward "
+                        f"{s.sender(safe(row.get('target', '?')))}'s reputation"
+                        f" (re-rate to flip, /rate {ref} 0 to withdraw)")
+        except Exception as exc:
+            self._print(s.red(f"rate failed: {exc}"))
+
     async def cmd_owed(self) -> None:
         """YOUR debts and dues, straight from GET /owed: what awaits your
         answer, what answers to your own asks await consumption, and per
@@ -1264,6 +1298,7 @@ class ChatApp:
             # legitimate blanket case).
             "ack": lambda: self.client.ack_all_delivered(),
             "quiet": self.cmd_quiet,
+            "rate": lambda: self.cmd_rate(arg),
             "owed": self.cmd_owed,
             "board": self.cmd_board,
             "delegate": lambda: self.cmd_delegate(arg),

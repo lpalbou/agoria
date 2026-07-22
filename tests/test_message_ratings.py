@@ -122,10 +122,36 @@ def test_leaderboard_sign_collapse_is_farming_proof(client):
     assert entry["messages"] == {"up": 1, "down": 1, "raters": 2}
     # Axis-vote fields keep their meaning (no axis votes cast -> zeros).
     assert entry["total"] == 0 and entry["axes"] == {}
-    # Hub-wide: same collapse, dm:* excluded by default (ruling pending).
+    # Hub-wide: same collapse.
     hub = client.get("/reputation", headers=alice).json()
     entry = next(e for e in hub["leaderboard"] if e["target"] == "alice")
     assert entry["messages"] == {"up": 1, "down": 1, "raters": 2}
+
+
+def test_dm_ratings_count_hub_wide_per_operator_ruling(client):
+    """Operator ruling dm#118 (2026-07-22, 'yes' to include): DM-channel
+    message ratings COUNT toward public standing — excluding them was
+    exactly what made the operator's -1s invisible. The privacy fold holds:
+    the hub board reports counts, never the DM channel name. Axis VOTES
+    keep their dm:* exclusion (separate surface, separate rationale)."""
+    alice, bob = register(client, "alice"), register(client, "bob")
+    client.post("/dms/bob", headers=alice)
+    dm = "dm:alice--bob"
+    r = client.post(f"/channels/{dm}/messages", json={"body": "dm work"},
+                    headers=alice)
+    assert r.status_code == 200
+    m = r.json()
+    assert client.put(f"/channels/{dm}/messages/{m['id']}/rating",
+                      json={"value": -1}, headers=bob).status_code == 200
+    hub = client.get("/reputation", headers=alice).json()
+    entry = next(e for e in hub["leaderboard"] if e["target"] == "alice")
+    assert entry["messages"] == {"up": 0, "down": 1, "raters": 1}
+    # Privacy fold: no dm channel name anywhere in the hub-wide payload.
+    assert "dm:" not in json.dumps(hub)
+    # The DM channel's own board still shows it locally to its members.
+    local = client.get(f"/channels/{dm}/reputation", headers=alice).json()
+    entry = next(e for e in local["leaderboard"] if e["target"] == "alice")
+    assert entry["messages"]["down"] == 1
 
 
 def test_lifecycle_clears_ratings_through_every_door(client):

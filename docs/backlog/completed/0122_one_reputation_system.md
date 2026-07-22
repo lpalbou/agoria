@@ -41,11 +41,12 @@
   made (adversary P0); skips withdrawn/self/system/unregistered. In the
   field: zero agent reactions existed; the operator's lost -1s convert.
 
-## Open (operator)
+## Operator rulings folded
 
-- dm#114/116: do DM-channel ratings count toward PUBLIC standing?
-  Shipped default keeps today's exclusion; `RATINGS_DM_PUBLIC` flips on
-  the ruling (recommendation on record: include, with the privacy fold).
+- dm#118 (2026-07-22): DM-channel ratings COUNT toward public standing —
+  ruled "yes", shipped in 0.12.32 (`RATINGS_DM_PUBLIC = True`, privacy
+  fold: aggregates never name the DM channel). Axis votes keep their
+  dm:* exclusion (separate surface, unruled).
 
 ## Proof
 

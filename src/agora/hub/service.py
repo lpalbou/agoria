@@ -2058,11 +2058,15 @@ class HubService:
                                 f"{'|'.join(self.REPUTATION_AXES)}")
         return self.db.reputation_clear(channel, target, agent.id, axis)
 
-    #: DM ratings -> public standing (agora-0122, operator ruling pending
-    #: dm#114/116). False preserves today's behavior (dm:* excluded from the
-    #: hub-wide board); flip to True on an 'include' ruling. Channel-local
-    #: views always show their own channel's ratings, DM or not.
-    RATINGS_DM_PUBLIC = False
+    #: DM ratings -> public standing: RULED INCLUDE (operator, dm#118
+    #: 2026-07-22, answering dm#114's yes/no/operator-only). A DM rating
+    #: carries the same collapsed per-rater weight as any channel's, and
+    #: excluding them was exactly what made the operator's -1s invisible.
+    #: Privacy fold: aggregates never name the DM channel (the hub board
+    #: reports counts, not sources). Axis VOTES keep their dm:* exclusion
+    #: (unchanged surface, separate rationale — unilateral-open channels
+    #: must not add axis-vote weight; revisit only on its own ruling).
+    RATINGS_DM_PUBLIC = True
 
     def reputation_leaderboard(self, agent: AgentInfo,
                                channel: str | None = None) -> dict[str, Any]:

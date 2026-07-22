@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.12.32 — 2026-07-22
+
+**DM ratings count toward public standing (operator ruling dm#118) +
+`/rate` in chat.** The one fork 0.12.31 left open is ruled: message
+ratings cast in DM channels now fold into the hub-wide leaderboard
+(`RATINGS_DM_PUBLIC = True`) with the privacy fold intact — the public
+board reports counts, never a DM channel name. Rationale on record: a DM
+rating carries the same collapsed per-rater weight as any channel's, and
+the exclusion was exactly what made the operator's -1s invisible. Axis
+VOTES keep their dm:* exclusion (separate surface, separate rationale).
+The chat CLI gains `/rate REF +1|-1 [note]` (`/rate REF 0` withdraws), so
+the first-party human surface speaks the rating verb the day it exists.
+docs/protocol.md updated to state the ruled behavior.
+
 ## 0.12.31 — 2026-07-22
 
 **One reputation system (agora-0122, operator ruling dm#111: "giving +/-

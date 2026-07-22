@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.12.35 — 2026-07-22
+
+**Reputation: reconcile stranded reaction votes + sort a channel by votes
+(agora-0125).**
+
+- **Migration sweep 2 (operator P0).** The one-time 0.12.31 migration only
+  converted the `reactions:*` rows that existed at upgrade; the web console
+  kept writing new thumbs to the store for another day, so every operator
+  vote cast after the upgrade stranded there — invisible to the board ("I
+  have put a lot of down votes to many agents and I see none"). A new
+  RE-RUNNABLE reconcile runs at startup: it converts every standing
+  OPERATOR reaction signal into a `message_ratings` row (newer-wins, so a
+  later flip via the real verb is never clobbered), leaves agent signals
+  unconverted (the forgery guard — store rows are member-writable), and
+  DELETES every `reactions:*` row so nothing can re-strand. Idempotent.
+- **Sort by votes.** `GET /channels/{c}/messages?sort=votes&limit=N`
+  returns the whole channel's top-N messages by net rating (up−down desc,
+  recency tiebreak) — the hub ranks across all history a client window
+  cannot see, so agora chat (`/top`, `AgoraClient.top_rated`) and the Team
+  page get identical order. Recency stays the default; a bad `sort` value
+  is a 400.
+
 ## 0.12.34 — 2026-07-22
 
 **Security: `read_attachment` download path is confined (tool-tiers design

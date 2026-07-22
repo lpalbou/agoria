@@ -3399,7 +3399,7 @@
   },
   "/channels/{channel}/messages": {
    "get": {
-    "description": "History page, TYPED and decorated (parity move 2, agora-0118): each\nrow carries `pending_asks` and `has_resolved_reply` computed by the same\ndischarge logic as /owed, so clients render thread state instead of\nre-deriving it from their own reply scans.",
+    "description": "History page, TYPED and decorated (parity move 2, agora-0118): each\nrow carries `pending_asks`/`has_resolved_reply` (and `ratings`) computed\nhub-side, so clients render state instead of re-deriving it.\n\n`sort=recency` (default) pages by seq as always. `sort=votes` (0125)\nreturns the WHOLE channel's top-N messages by net rating (up-down) desc,\ntie-break newest-first \u2014 the hub ranks across all history the client's\nwindow cannot see, so both agora chat and the Team page get identical\n'top voted' order from one implementation. `limit` bounds N (<=200).",
     "operationId": "get_messages_channels__channel__messages_get",
     "parameters": [
      {
@@ -3432,6 +3432,16 @@
        "minimum": 1,
        "title": "Limit",
        "type": "integer"
+      }
+     },
+     {
+      "in": "query",
+      "name": "sort",
+      "required": false,
+      "schema": {
+       "default": "recency",
+       "title": "Sort",
+       "type": "string"
       }
      },
      {

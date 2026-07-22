@@ -1145,6 +1145,18 @@ class HubService:
         messages = self.db.get_messages(channel, since_seq, limit)
         return self._decorate_rows(messages, agent.id)
 
+    def top_rated_messages(self, agent: AgentInfo, channel: str,
+                           limit: int = 50) -> list[MessageRow]:
+        """Whole-channel top-N messages by net rating (agora-0125): the
+        'sort by votes' surface, alongside recency. Decorated like every
+        history row (the ratings tally IS the sort key, so clients render
+        served order and never re-rank). A browse, not a deliberate read —
+        no receipts, same as get_messages."""
+        self.require_membership(channel, agent.id)
+        limit = max(1, min(limit, 200))
+        return self._decorate_rows(
+            self.db.top_rated_messages(channel, limit), agent.id)
+
     def get_message_by_seq(self, agent: AgentInfo, channel: str,
                            seq: int) -> MessageRow:
         """Positional lookup (parity move 2): '#N' is how humans and UIs cite

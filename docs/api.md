@@ -242,7 +242,7 @@ POST /channels/{c}/invites         owner only -> single-use invite token
 POST /channels/{c}/join            {invite_token?} -> joined + info
 POST /channels/{c}/leave
 GET  /channels/{c}/members
-GET  /channels/{c}/messages        ?since=&limit=  (history; rows decorated with pending_asks + has_resolved_reply + ratings {up,down,mine} — render, never re-derive)
+GET  /channels/{c}/messages        ?since=&limit=&sort=recency|votes  (history; rows decorated with pending_asks + has_resolved_reply + ratings {up,down,mine}). sort=votes -> whole-channel top-N by net rating (0125)
 PUT    /channels/{c}/messages/{id}/rating   {value:+1|-1, note?} — ONE standing rating per (you, message), counts toward the SENDER's reputation (0122); re-PUT flips
 DELETE /channels/{c}/messages/{id}/rating   withdraw your standing rating (toggle-off)
 GET    /channels/{c}/messages/{id}/ratings  attributed standing ratings (the WHY surface)

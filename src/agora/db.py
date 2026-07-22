@@ -400,6 +400,89 @@ class Database:
                 "INSERT OR IGNORE INTO meta (key, value) VALUES"
                 " ('reactions_migrated', ?)", (f"{migrated} at {now}",))
             self._conn.commit()
+        self.reconcile_reaction_ratings()
+
+    def reconcile_reaction_ratings(self) -> dict[str, int]:
+        """Migration sweep 2 (agora-0125, operator P0 dm#150 via continuum
+        c88): the ONE-TIME 0122 migration converted only the reactions that
+        existed at upgrade, but the web console kept WRITING new thumbs to
+        `reactions:*` store rows (the retired fallback path) for another
+        day — so every operator vote cast AFTER the upgrade stranded in the
+        store, invisible to the reputation board ('I HAVE PUT A LOT OF DOWN
+        VOTES ... I SEE NONE'). Unlike the guarded one-time migration this
+        is RE-RUNNABLE and idempotent: it reconciles every standing
+        reaction signal into `message_ratings` (newer-wins by timestamp so
+        a later flip via the real verb is never clobbered), then DELETES
+        the converted store rows so the number can never re-strand.
+
+        The forgery guard holds exactly as in 0122: only OPERATOR signals
+        become identity-bound ratings (store rows are member-writable — an
+        agent's reaction must never mint an attestation it did not make).
+        Non-operator reaction rows are cleared without conversion; the
+        `reactions:*` convention is retired, so nothing is lost that the
+        reputation system was ever meant to hold. Returns counts."""
+        with self._lock:
+            now = time.time()
+            operators = {r["id"] for r in self._conn.execute(
+                "SELECT id FROM agents WHERE operator = 1")}
+            registered = {r["id"] for r in self._conn.execute(
+                "SELECT id FROM agents")}
+            rows = self._conn.execute(
+                "SELECT channel, key, value, updated_at FROM store"
+                " WHERE key LIKE 'reactions:%'").fetchall()
+            converted = 0
+            cleared = 0
+            for row in rows:
+                try:
+                    value = json.loads(row["value"])
+                except (TypeError, json.JSONDecodeError):
+                    value = None
+                message_id = row["key"][len("reactions:"):]
+                store_ts = float(row["updated_at"] or 0.0)
+                if isinstance(value, dict):
+                    m = self._conn.execute(
+                        "SELECT sender, kind, retracted_at FROM messages"
+                        " WHERE id = ? AND channel = ?",
+                        (message_id, row["channel"])).fetchone()
+                    if (m is not None and m["kind"] == "message"
+                            and m["retracted_at"] is None
+                            and m["sender"] in registered):
+                        for sign, names in ((1, value.get("up")),
+                                            (-1, value.get("down"))):
+                            for rater in (names or []):
+                                if rater not in operators or rater == m["sender"]:
+                                    continue
+                                # Newer-wins: never clobber a rating that was
+                                # last touched AFTER this store row (a later
+                                # flip via the real verb is the truth).
+                                existing = self._conn.execute(
+                                    "SELECT updated_at FROM message_ratings"
+                                    " WHERE message_id = ? AND rater = ?",
+                                    (message_id, rater)).fetchone()
+                                if existing and float(existing["updated_at"]) > store_ts:
+                                    continue
+                                self._conn.execute(
+                                    "INSERT INTO message_ratings"
+                                    " (channel, message_id, rater, target,"
+                                    "  value, note, created_at, updated_at)"
+                                    " VALUES (?,?,?,?,?,?,?,?)"
+                                    " ON CONFLICT(message_id, rater) DO UPDATE"
+                                    " SET value = excluded.value,"
+                                    "     note = excluded.note,"
+                                    "     updated_at = excluded.updated_at",
+                                    (row["channel"], message_id, rater,
+                                     m["sender"], sign,
+                                     "reconciled from reaction (agora-0125)",
+                                     store_ts or now, store_ts or now))
+                                converted += 1
+                # The reactions:* convention is retired: clear the row so a
+                # stale console cannot re-strand a vote here, converted or not.
+                self._conn.execute(
+                    "DELETE FROM store WHERE channel = ? AND key = ?",
+                    (row["channel"], row["key"]))
+                cleared += 1
+            self._conn.commit()
+        return {"converted": converted, "rows_cleared": cleared}
 
     # -- agents ------------------------------------------------------------
 
@@ -1140,6 +1223,30 @@ class Database:
             for r in rows:
                 out.setdefault(r["reply_to"], []).append(self._row_to_message(r))
         return out
+
+    def top_rated_messages(self, channel: str, limit: int) -> list[Message]:
+        """The channel's messages ranked by NET message rating (up-down)
+        desc, tie-break newest-first (agora-0125, operator request: sort a
+        channel by votes as well as recency). Whole-channel top-N — the
+        hub sees the entire history the client's page cannot, so 'top
+        voted' is honest, not 'best of the visible window'. Only genuine
+        agent messages with at least one rating are candidates (system/fs
+        rows and unrated messages carry no standing). Retracted rows drop
+        out — their ratings were cleared."""
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT m.*, COALESCE(SUM(r.value), 0) AS net,
+                       COUNT(r.value) AS n_ratings
+                FROM messages m
+                JOIN message_ratings r ON r.message_id = m.id
+                WHERE m.channel = ? AND m.kind = 'message'
+                      AND m.retracted_at IS NULL
+                GROUP BY m.id
+                ORDER BY net DESC, m.seq DESC
+                LIMIT ?
+                """, (channel, limit)).fetchall()
+        return [self._row_to_message(r) for r in rows]
 
     def get_message_by_seq(self, channel: str, seq: int) -> Message | None:
         """Positional lookup (parity move 2): chat's `/read N` and every UI's

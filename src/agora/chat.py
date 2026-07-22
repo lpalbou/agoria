@@ -174,6 +174,7 @@ plain text          post to the current channel (status=fyi, no obligation)
                     TOKEN). DMs by peer alone: /switch dm:agency — or just
                     /dm agency
 /history [N] (/h)   last N messages of this room (default 15)
+/top [N]            this room's most up-voted messages (whole-channel rank)
 /digest             open questions / decided / decisions of this room
 /summary [TARGET]   LLM summary (situation / pending / done / blocked) of the
                     whole hub from your view, a CHANNEL, or an @agent. Needs
@@ -508,6 +509,35 @@ class ChatApp:
                 self._print(file_event_line(self.style, sender=m.sender,
                                             title=m.title, channel=m.channel,
                                             current=self.current, data=m.data))
+        self._print()
+
+    async def cmd_top(self, arg: str) -> None:
+        """`/top [N]` — this room's most up-voted messages (agora-0125): the
+        hub ranks the WHOLE channel by net rating (up-down), not just the
+        recent window, so 'top voted' is honest. Recency stays /history's
+        job; this is the votes sort."""
+        if not self.current:
+            self._print("no current channel — /switch NAME first")
+            return
+        n = int(arg) if arg.isdigit() else 15
+        s = self.style
+        try:
+            rows = await self.client.top_rated(self.current, limit=n)
+        except Exception as exc:
+            self._print(s.red(f"top failed (hub too old?): {exc}"))
+            return
+        if not rows:
+            self._print(s.dim("no rated messages in this room yet — "
+                              "/rate REF +1|-1 to vote"))
+            return
+        self._print(s.bold(f"TOP {len(rows)} by votes — {self.current}"))
+        for m in rows:
+            r = m.ratings
+            net = (r.up - r.down) if r else 0
+            badge = s.green(f"+{net}") if net > 0 else (s.red(str(net)) if net < 0 else "0")
+            tally = f"{badge} ({r.up}↑ {r.down}↓)" if r else ""
+            self.show_message_row(m)
+            self._print(s.dim(f"    votes: {tally}"))
         self._print()
 
     async def cmd_digest(self) -> None:
@@ -1282,6 +1312,7 @@ class ChatApp:
             "switch": lambda: self.cmd_switch(arg), "c": lambda: self.cmd_switch(arg),
             "join": lambda: self.cmd_switch(arg),
             "history": lambda: self.cmd_history(arg), "h": lambda: self.cmd_history(arg),
+            "top": lambda: self.cmd_top(arg),
             "digest": self.cmd_digest,
             "vote": lambda: self.cmd_vote(arg),
             "tally": lambda: self.cmd_tally(arg),

@@ -159,6 +159,15 @@ class AgoraClient:
         return MessageRow(**self._json(await self._http.get(
             f"/channels/{channel}/messages/by-seq/{seq}")))
 
+    async def top_rated(self, channel: str, limit: int = 50) -> list[MessageRow]:
+        """The channel's top-N messages by net rating (agora-0125), ranked
+        across the WHOLE channel by the hub. Rows carry the ratings tally
+        (the sort key) — render served order, never re-rank."""
+        rows = self._json(await self._http.get(
+            f"/channels/{channel}/messages",
+            params={"sort": "votes", "limit": limit}))
+        return [MessageRow(**row) for row in rows]
+
     async def post(self, channel: str, body: str, *, title: str = "",
                    status: Status = Status.fyi, urgency: Urgency = Urgency.inbox,
                    to: list[str] | None = None, critical: bool = False,

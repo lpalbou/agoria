@@ -275,3 +275,114 @@ def test_migration_converts_operator_reactions_once():
     reopened2 = Database(path)
     assert reopened2.ratings_for_messages([m.id]) == {}
     reopened2.close()
+
+
+def test_sort_by_votes_ranks_whole_channel(client):
+    """agora-0125 (operator request): a channel sorts by votes as well as
+    recency. sort=votes returns the WHOLE channel's top-N by net rating
+    (up-down) desc, newest-first tiebreak — the hub ranks across all
+    history the client's window cannot see. Unrated + system + retracted
+    rows never appear; ratings decoration rides each row as the sort key."""
+    alice, bob = register(client, "alice"), register(client, "bob")
+    carol = register(client, "carol")
+    make_room(client, alice, {"bob": bob, "carol": carol})
+    msgs = {name: post(client, alice, body=name)["id"]
+            for name in ("weak", "strong", "negative", "unrated")}
+    # strong: +2 (two raters); weak: +1; negative: -1.
+    for rater in (bob, carol):
+        client.put(f"/channels/room/messages/{msgs['strong']}/rating",
+                   json={"value": 1}, headers=rater)
+    client.put(f"/channels/room/messages/{msgs['weak']}/rating",
+               json={"value": 1}, headers=bob)
+    client.put(f"/channels/room/messages/{msgs['negative']}/rating",
+               json={"value": -1}, headers=bob)
+    top = client.get("/channels/room/messages",
+                     params={"sort": "votes", "limit": 10}, headers=alice).json()
+    bodies = [m["body"] for m in top]
+    # Order: strong (+2), weak (+1), negative (-1). 'unrated' absent.
+    assert bodies == ["strong", "weak", "negative"]
+    assert all(m["kind"] == "message" for m in top)
+    assert top[0]["ratings"] == {"up": 2, "down": 0, "mine": 0}
+    # A bad sort value is refused, not silently ignored.
+    assert client.get("/channels/room/messages", params={"sort": "nonsense"},
+                      headers=alice).status_code == 400
+    # Recency default is unchanged (system row + all four posts, by seq).
+    recent = client.get("/channels/room/messages", headers=alice).json()
+    assert [m["body"] for m in recent if m["kind"] == "message"] == \
+        ["weak", "strong", "negative", "unrated"]
+
+
+def test_reconcile_sweep_converts_stranded_operator_reactions(tmp_path):
+    """Migration sweep 2 (agora-0125, operator P0): the one-time 0122
+    migration only caught reactions present at upgrade; the console kept
+    writing new thumbs to reactions:* store rows afterward, stranding every
+    later operator vote where the board can't see it. reconcile_reaction_
+    ratings is RE-RUNNABLE, converts operator signals into ratings
+    (newer-wins), leaves agent signals unconverted (forgery guard), and
+    DELETES every reaction row so nothing re-strands."""
+    from agora.db import Database
+
+    db = Database(str(tmp_path / "h.db"))
+    try:
+        db.register_agent("op", "op", "k-op", operator=True)
+        db.register_agent("flow", "flow", "k-flow")
+        db.register_agent("peer", "peer", "k-peer")
+        db.create_channel("room", False, "op")
+        db.add_member("room", "flow"); db.add_member("room", "peer")
+        m1 = db.insert_message("room", "flow", kind="message", status="fyi",
+                               urgency="inbox", title="", body="a", data=None,
+                               reply_to=None, critical=False, downgraded=False, to=[])
+        m2 = db.insert_message("room", "flow", kind="message", status="fyi",
+                               urgency="inbox", title="", body="b", data=None,
+                               reply_to=None, critical=False, downgraded=False, to=[])
+        # Operator down-voted m1 via the store fallback (stranded); a PEER
+        # (non-operator) up-voted m2 in the store (must NOT convert).
+        db.store_set("room", f"reactions:{m1.id}", {"up": [], "down": ["op"]}, "op")
+        db.store_set("room", f"reactions:{m2.id}", {"up": ["peer"], "down": []}, "peer")
+
+        out = db.reconcile_reaction_ratings()
+        assert out["converted"] == 1 and out["rows_cleared"] == 2
+        # Operator's stranded -1 is now a rating on flow.
+        r = db.ratings_for_messages([m1.id])[m1.id]
+        assert len(r) == 1 and r[0]["rater"] == "op" and r[0]["value"] == -1
+        # Peer's reaction did NOT become a rating (forgery guard).
+        assert db.ratings_for_messages([m2.id]) == {}
+        # Every reaction row is gone — nothing can re-strand.
+        assert db.store_get("room", f"reactions:{m1.id}") is None
+        assert db.store_get("room", f"reactions:{m2.id}") is None
+        # Idempotent: a second sweep converts nothing more and does not throw.
+        assert db.reconcile_reaction_ratings() == {"converted": 0, "rows_cleared": 0}
+    finally:
+        db.close()
+
+
+def test_reconcile_newer_rating_wins_over_stranded_store_row(tmp_path):
+    """A later flip through the REAL verb must survive reconciliation: if a
+    rating's updated_at is newer than the stranded store row, the sweep
+    leaves it (newer-wins), it never resurrects an older store value."""
+    from agora.db import Database
+
+    db = Database(str(tmp_path / "h2.db"))
+    try:
+        db.register_agent("op", "op", "k-op", operator=True)
+        db.register_agent("flow", "flow", "k-flow")
+        db.create_channel("room", False, "op")
+        db.add_member("room", "flow")
+        m = db.insert_message("room", "flow", kind="message", status="fyi",
+                              urgency="inbox", title="", body="a", data=None,
+                              reply_to=None, critical=False, downgraded=False, to=[])
+        # Old stranded store row says +1; the operator later flipped to -1
+        # via the real verb (rating row, newest).
+        import time as _t
+        db._conn.execute(
+            "INSERT INTO store (channel, key, value, version, updated_by, updated_at)"
+            " VALUES (?,?,?,?,?,?)",
+            ("room", f"reactions:{m.id}", '{"up": ["op"], "down": []}', 1, "op",
+             _t.time() - 100))
+        db._conn.commit()
+        db.rating_cast("room", m.id, "op", "flow", -1, "flipped via verb")
+        db.reconcile_reaction_ratings()
+        r = db.ratings_for_messages([m.id])[m.id]
+        assert len(r) == 1 and r[0]["value"] == -1  # the flip stood
+    finally:
+        db.close()

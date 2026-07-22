@@ -636,13 +636,23 @@ def get_messages(
     channel: str,
     since: int = Query(default=0, ge=0),
     limit: int = Query(default=200, ge=1, le=1000),
+    sort: str = Query(default="recency"),
     agent: AgentInfo = Depends(current_agent),
     service: HubService = Depends(get_service),
 ) -> list[MessageRow]:
     """History page, TYPED and decorated (parity move 2, agora-0118): each
-    row carries `pending_asks` and `has_resolved_reply` computed by the same
-    discharge logic as /owed, so clients render thread state instead of
-    re-deriving it from their own reply scans."""
+    row carries `pending_asks`/`has_resolved_reply` (and `ratings`) computed
+    hub-side, so clients render state instead of re-deriving it.
+
+    `sort=recency` (default) pages by seq as always. `sort=votes` (0125)
+    returns the WHOLE channel's top-N messages by net rating (up-down) desc,
+    tie-break newest-first — the hub ranks across all history the client's
+    window cannot see, so both agora chat and the Team page get identical
+    'top voted' order from one implementation. `limit` bounds N (<=200)."""
+    if sort == "votes":
+        return _run(service.top_rated_messages, agent, channel, limit)
+    if sort != "recency":
+        raise HTTPException(400, "sort must be 'recency' or 'votes'")
     return _run(service.get_messages, agent, channel, since, limit)
 
 

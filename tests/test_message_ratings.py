@@ -106,17 +106,14 @@ def test_rating_gates(client):
                       json={"value": 1}, headers=bob).status_code == 404
 
 
-def test_score_counts_colleagues_while_votes_are_per_message(client):
-    """The operator's FINAL rule (dm#134: 'i meant the MECHANICS!!! 10
-    messages = UP TO 10 votes'): casting is per message — one standing
-    vote per (rater, message), flip/withdraw free — but the SCORE counts
-    each colleague once per category (net sign). Five pleased thumbs from
-    bob = one voice; the adversary-measured DM pair-farm (30 points from
-    one rater) is structurally impossible."""
+def test_raw_net_score_a_vote_is_a_vote(client):
+    """The operator's FINAL rule (dm#161, verbatim): 'global reputation
+    score = SUM OF ALL THE UP AND DOWN VOTES IN ALL CATEGORIES, FUCKING
+    PERIOD.' A vote is a vote: five pleased thumbs from bob = +5, no
+    collapse. score = up - down at every zoom (cell, global, total)."""
     alice, bob = register(client, "alice"), register(client, "bob")
     carol = register(client, "carol")
     make_room(client, alice, {"bob": bob, "carol": carol})
-    # bob rates FIVE of alice's messages up: five votes, ONE voice.
     for i in range(5):
         m = post(client, alice, body=f"msg {i}")
         client.put(f"/channels/room/messages/{m['id']}/rating",
@@ -126,32 +123,31 @@ def test_score_counts_colleagues_while_votes_are_per_message(client):
                json={"value": -1}, headers=carol)
     board = client.get("/channels/room/reputation", headers=alice).json()
     entry = next(e for e in board["leaderboard"] if e["target"] == "alice")
-    assert entry["breakdown"]["general"] == {"score": 0, "up": 1, "down": 1,
+    # Raw net: 5 up, 1 down -> score +4. One arithmetic, no hidden voices.
+    assert entry["breakdown"]["general"] == {"score": 4, "up": 5, "down": 1,
                                              "raters": 2}
-    assert entry["raters"] == 2 and entry["score"] == 0
-    # RAW global vote counts (agora-0126): bob's 5 ups + carol's 1 down are
-    # visible UNCOLLAPSED on the global line, even though score is 0.
+    assert entry["score"] == 4 and entry["raters"] == 2
+    # `votes` on the global line = sum of cell counts (same numbers).
     assert entry["votes"] == {"up": 5, "down": 1}
-    # Hub-wide: same collapse.
+    # score = sum of category scores = up - down (pinned invariant).
+    assert entry["score"] == sum(c["score"] for c in entry["breakdown"].values())
+    # Hub-wide: identical raw net.
     hub = client.get("/reputation", headers=alice).json()
     entry = next(e for e in hub["leaderboard"] if e["target"] == "alice")
-    assert entry["breakdown"]["general"]["score"] == 0
-    # The per-message TALLY still shows all five standings (mechanics
-    # intact): the row decoration is where per-message truth lives.
+    assert entry["score"] == 4
+    # Per-message tally still shows each standing vote (casting mechanics).
     row = client.get(f"/channels/room/messages/by-seq/{m['seq']}",
                      headers=alice).json()
     assert row["ratings"] == {"up": 0, "down": 1, "mine": 0}
 
 
-def test_hub_axis_opinions_stay_one_voice_per_colleague(client):
-    """The other half of the rule: a categorized OPINION (trust/...) is a
-    standing judgment, not a per-action signal — hub-wide it counts once
-    per colleague however many channels repeat it (the measured 0094
-    channel-farm stays closed). Within one channel the primary key already
-    guarantees one standing vote per rater."""
+def test_hub_axis_votes_sum_across_channels_under_raw_net(client):
+    """Under raw-net (operator dm#161) a standing axis vote in each of
+    three channels counts three — a vote is a vote, pooled. (The old
+    'one voice per colleague' collapse is gone; the daily cap, not
+    collapse, is the anti-farm, and three votes is nowhere near it.)"""
     alice, bob = register(client, "alice"), register(client, "bob")
     make_room(client, alice, {"bob": bob})
-    # bob states the same trust opinion about alice in three rooms.
     for name in ("r1", "r2"):
         client.post("/channels", json={"name": name}, headers=alice)
         t = client.post(f"/channels/{name}/invites", json={"agent_id": "bob"},
@@ -164,9 +160,9 @@ def test_hub_axis_opinions_stay_one_voice_per_colleague(client):
                json={"axis": "trust", "value": 1}, headers=bob)
     hub = client.get("/reputation", headers=alice).json()
     entry = next(e for e in hub["leaderboard"] if e["target"] == "alice")
-    assert entry["breakdown"]["trust"] == {"score": 1, "up": 1, "down": 0,
+    assert entry["breakdown"]["trust"] == {"score": 3, "up": 3, "down": 0,
                                            "raters": 1}
-    assert entry["score"] == 1
+    assert entry["score"] == 3
 
 
 def test_dm_ratings_count_hub_wide_per_operator_ruling(client):

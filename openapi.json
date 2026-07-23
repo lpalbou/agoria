@@ -1479,7 +1479,8 @@
    "messages-decorated",
    "messages-by-seq",
    "message-ratings",
-   "reputation-unified-score"
+   "reputation-unified-score",
+   "reputation-raw-net"
   ]
  },
  "openapi": "3.1.0",

@@ -1,5 +1,5 @@
 {
-  "name": "message ratings (0122): one standing rating per (rater, message) — flip replaces, tally rides row decorations, leaderboard collapses per rater",
+  "name": "message ratings (0122/0127): one standing rating per (rater, message) — flip replaces, tally rides row decorations, leaderboard is RAW NET (a vote is a vote, operator dm#161)",
   "setup": [
     {"op": "register", "id": "alice"},
     {"op": "register", "id": "bob"},
@@ -29,12 +29,13 @@
       "categories": ["general", "trust", "wisdom", "thorough", "helper"],
       "leaderboard": [
         {"target": "alice", "score": -1, "raters": 2,
-         "breakdown": {"general": {"score": -1, "up": 0, "down": 1,
+         "votes": {"up": 1, "down": 2},
+         "breakdown": {"general": {"score": -1, "up": 1, "down": 2,
                                    "raters": 2}}}]}},
 
     {"op": "unrate", "as": "carol", "channel": "room", "message": "$m1.id"},
     {"call": "messages", "as": "carol", "channel": "room", "since": 0, "match_subset": [
       {"seq": "$m1.seq", "ratings": {"up": 0, "down": 1, "mine": 0}}]}
   ],
-  "note": "Counting rule pinned here is the operator's FINAL one (dm#134): voting is per message (bob may rate both messages), but the SCORE collapses each colleague to one net sign per category. At the leaderboard step bob holds m1 -1 (flip replaced his +1) and m2 +1 = net 0, so bob is a rater with NO voice; carol holds one -1 = the only voice. general = {score:-1, up:0, down:1, raters:2} — raters counts engaged colleagues, up/down count VOICES; score = up - down and total = sum(categories) are the pinned invariants. DMs included everywhere; boards serve ONE score + per-category breakdown."
+  "note": "RAW NET (operator final ruling dm#161: 'sum of ALL up and down votes, period'). At the leaderboard step bob holds m1 -1 (flip replaced his +1) and m2 +1, carol holds m1 -1 — so general = 1 up, 2 down, score -1. A vote is a vote: no collapse, score = up - down = sum(categories), one arithmetic at every zoom; `votes` on the global line equals the summed cell counts. Casting mechanics unchanged (one standing rating per rater+message, flip/withdraw); anti-farm is the cast-time daily cap, far above this. DMs included everywhere."
 }

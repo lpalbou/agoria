@@ -1633,77 +1633,83 @@ class Database:
             self._conn.commit()
         return cur.rowcount
 
+    #: Per-day COUNTED cap per (rater, target, category) — the cast-time
+    #: anti-farm that replaced score-time collapse (agora-0127, operator
+    #: ruling dm#161). Deliberately generous: a human never rates one agent
+    #: 50 times in a category in a single day, so it NEVER bites genuine
+    #: use (the operator's own votes read exactly as his arithmetic); it
+    #: bounds only machine bursts. Operator-tunable via the meta key
+    #: 'rating_daily_cap'. Excess votes are STORED (attributed, visible in
+    #: the detail view) but not counted — "sum of all votes" holds up to
+    #: the cap, which no real rater reaches.
+    RATING_DAILY_CAP_DEFAULT = 50
+
+    def _rating_daily_cap(self) -> int:
+        raw = self.meta_get("rating_daily_cap")
+        try:
+            return max(1, int(raw)) if raw else self.RATING_DAILY_CAP_DEFAULT
+        except (TypeError, ValueError):
+            return self.RATING_DAILY_CAP_DEFAULT
+
     def reputation_totals(self, channel: str | None) -> list[dict[str, Any]]:
-        """ONE unified aggregation for the whole reputation system
-        (agora-0123). The operator's final rule (dm#134: "i meant the
-        MECHANICS!!! 10 messages = UP TO 10 votes"), two sentences:
+        """ONE unified aggregation, RAW NET (agora-0127). The operator's
+        final rule, verbatim (dm#161): "global reputation score = SUM OF
+        ALL THE UP AND DOWN VOTES IN ALL CATEGORIES, FUCKING PERIOD." His
+        model survived five corrections (dm 129/131/145/157/159); the model
+        is right and the score-time COLLAPSE was the wrong display, now
+        removed. So per category: score = (up-votes) - (down-votes), a
+        vote is a vote; total = sum(categories) — one arithmetic, three
+        zooms, no hidden voice-counting.
 
-        You may vote each message (the CASTING mechanics — one standing
-        vote per rater per message, flip/withdraw any time). The SCORE
-        counts each colleague once per category: their net stance,
-        collapsed to one sign — so fifty pleased thumbs from one colleague
-        weigh one voice, and the measured pair-farm (30 points from 1
-        rater in 4.7s) is structurally impossible.
+        Anti-farm moved from score-time collapse to CAST TIME: one standing
+        vote per rater per message (structural) + a generous per-day
+        COUNTED cap per (rater, target, category) so a burst cannot pump a
+        number (the measured DM pair-farm). Votes beyond the cap are stored
+        and attributed but not counted; the cap never reaches a human's
+        real cadence, so the operator's own totals read exactly as his
+        arithmetic.
 
-        Same collapse in every scope; `channel=None` = hub-wide, DMs
-        included (with collapse a DM adds at most one voice per colleague);
-        no channel names returned. up/down are collapsed-RATER counts, so
-        score = up - down per category and total = sum(categories) — the
-        invariants continuum's conformance suite pins.
+        `channel=None` = hub-wide, DMs included; no channel names returned.
+        up/down are the COUNTED raw counts, so score = up - down per
+        category and total = sum(categories) hold exactly.
 
-        Rows: {target, category, score, up, down, raters} where raters =
-        distinct colleagues with any standing input in the category (a
-        net-zero stance shows engagement without adding weight)."""
+        Rows: {target, category, score, up, down, raters}."""
         scope = "WHERE channel = ?" if channel else ""
         args = (channel,) if channel else ()
+        cap = self._rating_daily_cap()
         with self._lock:
             rows = self._conn.execute(
                 f"""
-                SELECT target, category, SUM(sign) AS score,
-                       SUM(CASE WHEN sign > 0 THEN 1 ELSE 0 END) AS up,
-                       SUM(CASE WHEN sign < 0 THEN 1 ELSE 0 END) AS down,
-                       COUNT(*) AS raters
-                FROM (
-                  SELECT target, category, rater,
-                         CASE WHEN SUM(value) > 0 THEN 1
-                              WHEN SUM(value) < 0 THEN -1 ELSE 0 END AS sign
-                  FROM (
-                    SELECT target, axis AS category, rater, value
+                WITH pooled AS (
+                    SELECT target, axis AS category, rater, value, updated_at
                     FROM reputation_votes {scope}
                     UNION ALL
-                    SELECT target, 'general' AS category, rater, value
+                    SELECT target, 'general' AS category, rater, value, updated_at
                     FROM message_ratings {scope}
-                  ) GROUP BY target, category, rater
-                ) GROUP BY target, category
-                """, (*args, *args)).fetchall()
-        return [dict(r) for r in rows]
+                ),
+                ranked AS (
+                    SELECT target, category, rater, value,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY target, category, rater,
+                                            CAST(updated_at / 86400 AS INTEGER)
+                               ORDER BY updated_at DESC
+                           ) AS rn
+                    FROM pooled
+                )
+                SELECT target, category,
+                       SUM(CASE WHEN rn <= ? THEN value ELSE 0 END) AS score,
+                       SUM(CASE WHEN rn <= ? AND value > 0 THEN 1 ELSE 0 END) AS up,
+                       SUM(CASE WHEN rn <= ? AND value < 0 THEN 1 ELSE 0 END) AS down,
+                       COUNT(DISTINCT rater) AS raters
+                FROM ranked GROUP BY target, category
+                """, (*args, *args, cap, cap, cap)).fetchall()
+        # Drop categories that ended up fully uncounted (all excess) so an
+        # empty cell never shows; keep any with a live score OR live counts.
+        return [dict(r) for r in rows if r["up"] or r["down"] or r["raters"]]
 
-    def reputation_raw_counts(self, channel: str | None = None) -> dict[str, dict[str, int]]:
-        """Per-target RAW vote counts — how many up-votes and down-votes an
-        agent actually received, NOT collapsed (agora-0126, operator ruling
-        dm#145: 'for the global score only, show the number of up and down
-        votes'). This is the number that makes displeasure visible: the
-        collapsed score can read +1 while the agent took four downvotes, and
-        the operator must SEE those four. Counts every standing signal —
-        each rated message, each axis vote — across both tables. Distinct
-        from the per-category up/down (which are collapsed voices): this is
-        the raw tally, shown only on the global line."""
-        scope = "WHERE channel = ?" if channel else ""
-        args = (channel,) if channel else ()
-        with self._lock:
-            rows = self._conn.execute(
-                f"""
-                SELECT target,
-                       SUM(CASE WHEN value > 0 THEN 1 ELSE 0 END) AS up,
-                       SUM(CASE WHEN value < 0 THEN 1 ELSE 0 END) AS down
-                FROM (
-                  SELECT target, value FROM reputation_votes {scope}
-                  UNION ALL
-                  SELECT target, value FROM message_ratings {scope}
-                ) GROUP BY target
-                """, (*args, *args)).fetchall()
-        return {r["target"]: {"up": int(r["up"]), "down": int(r["down"])}
-                for r in rows}
+    # (reputation_raw_counts, 0126's separate global up/down tally, is gone:
+    # under raw-net scoring the per-category cells ARE the raw counts, so
+    # the global line sums them — one arithmetic at every zoom, agora-0127.)
 
     def reputation_spread(self, channel: str | None = None) -> dict[str, dict[str, int]]:
         """Per-target spread within the scope: distinct channels + distinct

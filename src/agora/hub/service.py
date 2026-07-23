@@ -2096,7 +2096,6 @@ class HubService:
             self.require_membership(channel, agent.id)
         totals = self.db.reputation_totals(channel)
         spread = self.db.reputation_spread(channel)
-        raw = self.db.reputation_raw_counts(channel)
         boards: dict[str, dict[str, Any]] = {}
         for row in totals:
             t = boards.setdefault(row["target"], {
@@ -2108,12 +2107,15 @@ class HubService:
             t["score"] += int(row["score"])
         for target, t in boards.items():
             t["raters"] = spread.get(target, {}).get("raters", 0)
-            # RAW up/down on the GLOBAL line only (operator ruling dm#145):
-            # the collapsed `score` can read +1 while the agent took four
-            # downvotes — `votes` makes that displeasure visible without
-            # touching the anti-farm score. Per-category cells stay
-            # collapsed (his 'not the detailed trust/thorough' carve-out).
-            t["votes"] = raw.get(target, {"up": 0, "down": 0})
+            # `votes` on the global line = the sum of the per-category raw
+            # counts (agora-0127). Since cells are now RAW nets (not
+            # collapsed voices), this is the same one arithmetic at every
+            # zoom: global up/down = Σ cell up/down, and score = up - down.
+            # No second number to reconcile — the confusion the operator
+            # hit five times is gone by construction.
+            t["votes"] = {
+                "up": sum(c["up"] for c in t["breakdown"].values()),
+                "down": sum(c["down"] for c in t["breakdown"].values())}
             if channel is None:
                 t["channels"] = spread.get(target, {}).get("channels", 0)
         # Board order is HUB-decided (continuum pin p3): score desc, then

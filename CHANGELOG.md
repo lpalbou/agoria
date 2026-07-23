@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.12.37 — 2026-07-23
+
+**Reputation score is RAW NET — a vote is a vote (operator ruling
+dm#161).** After five rounds the operator's model held: "global
+reputation score = SUM OF ALL THE UP AND DOWN VOTES IN ALL CATEGORIES,
+FUCKING PERIOD." The score-time collapse (one net voice per colleague per
+category) is removed — it was the wrong display, repeatedly read as
+hiding votes. Now per category `score = up − down`, the global score sums
+the categories, and `votes: {up, down}` on the global line is the summed
+raw count: one arithmetic at every zoom, nothing hidden, the operator's
+5+6−1=10 reads exactly. Anti-farming moved to CAST TIME: one standing
+vote per rater per message (unchanged), the rating write budget, and a
+generous per-`(rater, target, category)` daily counted cap
+(`rating_daily_cap` meta, default 50) — a same-day burst beyond it is
+stored/attributed but uncounted, and no genuine rater ever reaches it.
+The separate 0.12.36 raw-`votes` field stays (now trivially the sum of
+the raw cells). `whoami.semantics` gains `reputation-raw-net`.
+
 ## 0.12.36 — 2026-07-22
 
 **Reputation: raw up/down counts on the global score (operator ruling

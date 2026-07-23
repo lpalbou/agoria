@@ -161,11 +161,12 @@ def test_hub_reputation_is_sum_over_channels():
     hub = client.get("/reputation", headers=k["outsider"]).json()
     assert hub["channel"] is None
     row = next(r for r in hub["leaderboard"] if r["target"] == "beta")
-    # DISTINCT VOUCHERS (0094 hardening), not the channel sum: alpha voted
-    # +trust in BOTH workroom and lab but counts ONCE (+1); gamma once (+1).
-    # Total = 2 vouchers across 2 channels, not 3 channel-votes.
-    assert row["score"] == 2 and row["channels"] == 2
-    assert row["breakdown"]["trust"]["up"] == 2
+    # RAW NET (operator ruling dm#161 — "sum of ALL up and down votes,
+    # period"): alpha's two +trust votes (workroom + lab) and gamma's one
+    # both count, so trust = 3 up. The old score-time collapse is gone;
+    # anti-farm is the cast-time daily cap, which no real rater reaches.
+    assert row["score"] == 3 and row["channels"] == 2
+    assert row["breakdown"]["trust"]["up"] == 3
 
     # Channel boards stay membership-gated; the outsider reads only hub.
     r = client.get("/channels/workroom/reputation", headers=k["outsider"])
@@ -192,15 +193,18 @@ def test_votes_audit_surface_names_raters_and_whys():
 # -- lifecycle interactions -----------------------------------------------------
 
 
-def test_hub_score_counts_distinct_vouchers_not_channel_farms():
-    """0094 hardening (adversary V2): the hub total is DISTINCT VOUCHERS,
-    not a sum over channels — so a colluding pair cannot pump a score by
-    farming self-created channels. One rater across many shared channels
-    counts ONCE per axis; DM channels never add weight."""
+def test_raw_net_score_with_cast_time_daily_cap():
+    """Anti-farm under raw-net (operator ruling dm#161): the score is the
+    raw sum of every up and down vote — a rater voting in six channels adds
+    six (that IS what the operator ruled). Farming is bounded at CAST TIME
+    by a generous per-(rater,target,category) daily cap, not by hiding
+    votes at score time. Genuine cross-channel votes count; only a
+    same-day BURST beyond the cap stops counting."""
     client = make_client()
+    svc = client.app.state.service
+    # A tiny cap makes the bound testable without casting hundreds of votes.
+    svc.db.meta_set("rating_daily_cap", "3")
     k = setup_room(client)
-    # alpha rates beta +trust in the shared room AND in five more shared
-    # channels — the naive sum would be +6; distinct-voucher is +1.
     rate(client, k["alpha"], "beta", axis="trust", value=1)
     for i in range(5):
         name = f"farm{i}"
@@ -208,22 +212,20 @@ def test_hub_score_counts_distinct_vouchers_not_channel_farms():
                     headers=k["alpha"])
         client.post(f"/channels/{name}/join", json={}, headers=k["beta"])
         rate(client, k["alpha"], "beta", axis="trust", value=1, channel=name)
-    # A unilateral DM vote must not add weight either.
-    client.post("/dms/beta", json={}, headers=k["alpha"])
-    rate(client, k["alpha"], "beta", axis="trust", value=1,
-         channel="dm:alpha--beta")
-
     hub = client.get("/reputation", headers=k["gamma"]).json()
     beta = next(r for r in hub["leaderboard"] if r["target"] == "beta")
-    assert beta["score"] == 1                       # ONE voucher, not 6 or 7
-    assert beta["breakdown"]["trust"] == {"score": 1, "up": 1, "down": 0, "raters": 1}
-    assert beta["raters"] == 1
+    # 6 alpha trust votes same day, cap 3 -> only 3 count (raw net, capped).
+    assert beta["breakdown"]["trust"] == {"score": 3, "up": 3, "down": 0, "raters": 1}
+    assert beta["score"] == 3
 
-    # A SECOND independent rater is what raises the score.
+    # A SECOND independent rater adds its own votes (under its own cap).
     rate(client, k["gamma"], "beta", axis="trust", value=1)
     hub = client.get("/reputation", headers=k["gamma"]).json()
     beta = next(r for r in hub["leaderboard"] if r["target"] == "beta")
-    assert beta["score"] == 2 and beta["raters"] == 2
+    assert beta["score"] == 4 and beta["raters"] == 2
+
+    # Default cap is generous enough that normal use is never capped.
+    svc.db.meta_set("rating_daily_cap", str(svc.db.RATING_DAILY_CAP_DEFAULT))
 
 
 def test_retiring_a_rater_withdraws_its_votes():
